@@ -1,0 +1,50 @@
+# =========================
+# Java + Gradle + IntelliJ
+# =========================
+
+# Build and output directories
+/build/
+out/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA project files
+.idea/
+# Keep shared settings
+!.idea/codeStyles/
+!.idea/runConfigurations/
+!.idea/inspectionProfiles/
+!.idea/misc.xml
+!.idea/modules.xml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Compiled class files
+*.class
+
+# JAR/WAR/EAR artifacts
+*.jar
+*.war
+*.ear
+
+# Generated files
+*.iml
+*.ipr
+*.iws
+
+# Local environment and credentials
+*.env
+local.properties
+
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
