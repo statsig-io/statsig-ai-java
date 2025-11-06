@@ -7,39 +7,39 @@ import java.util.concurrent.CompletableFuture;
 
 class StatsigAIInstance {
     private final Statsig statsigCoreInstance;
-    private final boolean dependsOnCoreSdk;;
+    private final boolean managesCoreInstance;
 
      StatsigAIInstance(StatsigIntegrationConfig config) {
         if (config instanceof StatsigIndependentConfig) {
             StatsigIndependentConfig standalone = (StatsigIndependentConfig) config;
             this.statsigCoreInstance = new Statsig(standalone.getSdkKey(), standalone.getStatsigOptions());
-            dependsOnCoreSdk = false;
+            managesCoreInstance = false;
         } else if (config instanceof StatsigCoreAttachedConfig) {
             StatsigCoreAttachedConfig integrated = (StatsigCoreAttachedConfig) config;
             this.statsigCoreInstance = integrated.getStatsigInstance();
-            dependsOnCoreSdk = true;
+            managesCoreInstance = true;
         } else {
             this.statsigCoreInstance = null;
-            dependsOnCoreSdk = false;
+            managesCoreInstance = false;
         }
     }
 
     CompletableFuture<Void> initialize() {
-         if (dependsOnCoreSdk && statsigCoreInstance != null) {
+         if (managesCoreInstance && statsigCoreInstance != null) {
              return statsigCoreInstance.initialize();
          }
          return CompletableFuture.completedFuture(null);
     }
 
     CompletableFuture<Void> shutdown() {
-         if (dependsOnCoreSdk && statsigCoreInstance != null) {
+         if (managesCoreInstance && statsigCoreInstance != null) {
              return statsigCoreInstance.shutdown();
          }
          return CompletableFuture.completedFuture(null);
     }
 
     CompletableFuture<Void> flushEvents() {
-         if (dependsOnCoreSdk && statsigCoreInstance != null) {
+         if (managesCoreInstance && statsigCoreInstance != null) {
              return statsigCoreInstance.flushEvents();
          }
          // TODO: add otel support
