@@ -6,7 +6,6 @@
 /build/
 out/
 .gradle/
-!gradle/wrapper/gradle-wrapper.jar
 
 # IntelliJ IDEA project files
 .idea/
@@ -33,6 +32,8 @@ Thumbs.db
 *.jar
 *.war
 *.ear
+# Exception: Gradle wrapper JAR must be tracked
+!gradle/wrapper/gradle-wrapper.jar
 
 # Generated files
 *.iml
