@@ -1,0 +1,28 @@
+{
+  "key": "prompt:7jszgFEAi1KRA2Tot6qikg",
+  "idType": "userID",
+  "defaultValue": {
+    "prompts": [
+      {
+        "content": "hoiiiiii {{input}}",
+        "role": "system"
+      }
+    ],
+    "name": "Version 2",
+    "temperature": 1,
+    "maxTokens": 1000,
+    "topP": 1,
+    "frequencyPenalty": 0,
+    "presencePenalty": 0,
+    "provider": "openai",
+    "model": "gpt-5",
+    "workflowBody": {
+      "type": "JSON",
+      "value": "{}"
+    },
+    "evalModel": "gpt-4o-mini",
+    "type": "Candidate",
+    "aiConfigName": "test_prompt"
+  }
+}
+
