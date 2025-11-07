@@ -15,9 +15,8 @@ public final class StatsigAI {
    * Creates an instance that is not managed by the static shared singleton.
    *
    * <p>Use this constructor when you need to maintain multiple independent AI instances at the same
-   * time. The caller is
-   * responsible for holding on to the returned object and invoking {@link #initialize()},
-   * {@link #shutdown()}, and {@link #flushEvents()} when appropriate.
+   * time. The caller is responsible for holding on to the returned object and invoking {@link
+   * #initialize()}, {@link #shutdown()}, and {@link #flushEvents()} when appropriate.
    */
   public StatsigAI(StatsigIntegrationConfig config) {
     Statsig core = null;
