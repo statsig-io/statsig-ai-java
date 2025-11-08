@@ -25,12 +25,9 @@ public class StatsigAITest {
 
   @Test
   public void newSharedWithAttachedConfigStoresSingleton() throws Exception {
-    StatsigOptions coreOptions =
-        new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("core").build();
+    StatsigOptions coreOptions = new StatsigOptions.Builder().setEnableIDLists(true).build();
     Statsig core = new Statsig("secret-core", coreOptions);
-    StatsigOptions attachedOptions =
-        new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("attached").build();
-    StatsigInitConfig.CoreAttached config = StatsigInitConfig.attached(core, attachedOptions);
+    StatsigInitConfig.CoreAttached config = StatsigInitConfig.attached(core);
 
     StatsigAI instance = StatsigAI.newShared(config).get(1, TimeUnit.SECONDS);
 
@@ -40,33 +37,24 @@ public class StatsigAITest {
   }
 
   @Test
-  public void constructorSupportsIndependentInstances() {
-    StatsigOptions optionsA =
-        new StatsigOptions.Builder()
-            .setDisableNetwork(true)
-            .setServiceName("independent-a")
-            .build();
-    StatsigOptions optionsB =
-        new StatsigOptions.Builder()
-            .setDisableNetwork(true)
-            .setServiceName("independent-b")
-            .build();
-    StatsigInitConfig.CoreIndependent configA =
-        new StatsigInitConfig.CoreIndependent("secret-1", optionsA);
-    StatsigInitConfig.CoreIndependent configB =
-        new StatsigInitConfig.CoreIndependent("secret-2", optionsB);
+  public void constructorSupportsIndependentInstances() throws Exception {
+    StatsigOptions optionsA = new StatsigOptions.Builder().build();
+    StatsigOptions optionsB = new StatsigOptions.Builder().build();
+
+    StatsigInitConfig.CoreIndependent configA = StatsigInitConfig.independent("secret-1", optionsA);
+    StatsigInitConfig.CoreIndependent configB = StatsigInitConfig.independent("secret-2", optionsB);
 
     StatsigAI first = new StatsigAI(configA);
     StatsigAI second = new StatsigAI(configB);
 
     assertNotSame(first, second);
 
-    assertTrue(first.initialize().isDone());
-    assertTrue(first.flushEvents().isDone());
-    assertTrue(first.shutdown().isDone());
+    first.initialize().get(1, TimeUnit.SECONDS);
+    first.flushEvents().get(1, TimeUnit.SECONDS);
+    first.shutdown().get(1, TimeUnit.SECONDS);
 
-    assertTrue(second.initialize().isDone());
-    assertTrue(second.flushEvents().isDone());
-    assertTrue(second.shutdown().isDone());
+    second.initialize().get(1, TimeUnit.SECONDS);
+    second.flushEvents().get(1, TimeUnit.SECONDS);
+    second.shutdown().get(1, TimeUnit.SECONDS);
   }
 }

@@ -33,17 +33,15 @@ public class StatsigInitConfigTest {
     StatsigOptions coreOptions =
         new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("core").build();
     Statsig core = new Statsig("secret", coreOptions);
-    StatsigOptions options = new StatsigOptions.Builder().setServiceName("attached").build();
 
-    StatsigInitConfig.CoreAttached config = StatsigInitConfig.attached(core, options);
+    StatsigInitConfig.CoreAttached config = StatsigInitConfig.attached(core);
 
     assertSame(core, config.getStatsigCoreInstance());
-    assertSame(options, config.getStatsigOptions());
   }
 
   @Test(expected = NullPointerException.class)
   public void attachedFactoryRejectsNullCore() {
-    StatsigInitConfig.attached(null, null);
+    StatsigInitConfig.attached(null);
   }
 
   @Test
@@ -51,23 +49,17 @@ public class StatsigInitConfigTest {
     StatsigOptions coreOptions =
         new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("core").build();
     Statsig core = new Statsig("secret", coreOptions);
-    StatsigInitConfig.CoreAttached config = new StatsigInitConfig.CoreAttached(core, null);
+    StatsigInitConfig.CoreAttached config = new StatsigInitConfig.CoreAttached(core);
 
     StatsigOptions newCoreOptions =
         new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("core-new").build();
     Statsig newCore = new Statsig("secret-new", newCoreOptions);
-    StatsigOptions options = new StatsigOptions.Builder().setServiceName("attached").build();
 
     assertSame(newCore, config.getStatsigCoreInstance());
-    assertSame(options, config.getStatsigOptions());
   }
 
   @Test(expected = NullPointerException.class)
   public void attachedSetterRejectsNullCore() {
-    StatsigOptions coreOptions =
-        new StatsigOptions.Builder().setDisableNetwork(true).setServiceName("core").build();
-    Statsig core = new Statsig("secret", coreOptions);
-    StatsigInitConfig.CoreAttached config = new StatsigInitConfig.CoreAttached(core, null);
-    new StatsigInitConfig.CoreAttached(null, null);
+    new StatsigInitConfig.CoreAttached(null);
   }
 }

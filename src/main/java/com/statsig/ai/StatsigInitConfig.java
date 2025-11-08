@@ -15,8 +15,8 @@ public interface StatsigInitConfig {
     return new CoreIndependent(sdkKey, statsigOptions);
   }
 
-  static CoreAttached attached(Statsig statsigCoreInstance, StatsigOptions statsigOptions) {
-    return new CoreAttached(statsigCoreInstance, statsigOptions);
+  static CoreAttached attached(Statsig statsigCoreInstance) {
+    return new CoreAttached(statsigCoreInstance);
   }
 
   final class CoreIndependent implements StatsigInitConfig {
@@ -44,11 +44,6 @@ public interface StatsigInitConfig {
   final class CoreAttached implements StatsigInitConfig {
     private Statsig statsigCoreInstance;
     private StatsigOptions statsigOptions;
-
-    public CoreAttached(Statsig statsigCoreInstance, StatsigOptions statsigOptions) {
-      this.statsigCoreInstance = statsigCoreInstance;
-      this.statsigOptions = statsigOptions;
-    }
 
     public CoreAttached(Statsig statsigCoreInstance) {
       this.statsigCoreInstance = statsigCoreInstance;
