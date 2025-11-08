@@ -1,15 +1,15 @@
 package com.statsig.ai;
 
 import com.statsig.Statsig;
-import com.statsig.ai.internal.StatsigIntegrationConfig;
 import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
   private static final Object LOCK = new Object();
   private static volatile StatsigAI sharedInstance;
 
-  private final Statsig statsigCoreInstance;
-  private final boolean ownsCoreInstance;
+  private final Statsig statsigServer;
+  // True when this AI instance created the Statsig core itself and must manage its lifecycle
+  private final boolean managesCoreLifecycle;
 
   /**
    * Creates an instance that is not managed by the static shared singleton.
@@ -18,24 +18,28 @@ public final class StatsigAI {
    * time. The caller is responsible for holding on to the returned object and invoking {@link
    * #initialize()}, {@link #shutdown()}, and {@link #flushEvents()} when appropriate.
    */
-  public StatsigAI(StatsigIntegrationConfig config) {
-    Statsig core = null;
-    boolean owns = false;
+  public StatsigAI(StatsigInitConfig config) {
+    Statsig statsig = null;
+    boolean managesLifecycle = false;
 
-    if (config instanceof StatsigIndependentConfig) {
-      StatsigIndependentConfig standalone = (StatsigIndependentConfig) config;
-      core = new Statsig(standalone.getSdkKey(), standalone.getStatsigOptions());
-      owns = true;
-    } else if (config instanceof StatsigCoreAttachedConfig) {
-      StatsigCoreAttachedConfig integrated = (StatsigCoreAttachedConfig) config;
-      core = integrated.getStatsigInstance();
-      owns = false;
+    if (config instanceof StatsigInitConfig.CoreIndependent) {
+      StatsigInitConfig.CoreIndependent standalone = (StatsigInitConfig.CoreIndependent) config;
+      if (standalone.getStatsigOptions() == null) {
+        statsig = new Statsig(standalone.getSdkKey());
+      } else {
+        statsig = new Statsig(standalone.getSdkKey(), standalone.getStatsigOptions());
+      }
+      managesLifecycle = true;
+    } else if (config instanceof StatsigInitConfig.CoreAttached) {
+      StatsigInitConfig.CoreAttached integrated = (StatsigInitConfig.CoreAttached) config;
+      statsig = integrated.getStatsigCoreInstance();
+      managesLifecycle = false;
     } else {
       System.err.println("[StatsigAI] Invalid config provided; Statsig core not created.");
     }
 
-    this.statsigCoreInstance = core;
-    this.ownsCoreInstance = owns;
+    this.statsigServer = statsig;
+    this.managesCoreLifecycle = managesLifecycle;
   }
 
   /**
@@ -45,7 +49,7 @@ public final class StatsigAI {
    * later with {@link #shared()} for convenience. Projects that prefer explicit multi-instance
    * management can skip this and directly use the public constructor above.
    */
-  public static CompletableFuture<StatsigAI> newShared(StatsigIntegrationConfig config) {
+  public static CompletableFuture<StatsigAI> newShared(StatsigInitConfig config) {
     StatsigAI instance = new StatsigAI(config);
     synchronized (LOCK) {
       sharedInstance = instance;
@@ -75,41 +79,23 @@ public final class StatsigAI {
     return instance;
   }
 
-  /**
-   * Initializes the underlying Statsig core if this instance created it.
-   *
-   * <p>In multi-instance scenarios you should call this after constructing the instance. When the
-   * instance attaches to an already initialized core, this is a no-op.
-   */
   public CompletableFuture<Void> initialize() {
-    if (ownsCoreInstance && statsigCoreInstance != null) {
-      return statsigCoreInstance.initialize();
+    if (managesCoreLifecycle && statsigServer != null) {
+      return statsigServer.initialize();
     }
     return CompletableFuture.completedFuture(null);
   }
 
-  /**
-   * Shuts down the underlying Statsig core if this instance owns the lifecycle.
-   *
-   * <p>Use this in multi-instance setups or during application shutdown to cleanly release
-   * resources.
-   */
   public CompletableFuture<Void> shutdown() {
-    if (ownsCoreInstance && statsigCoreInstance != null) {
-      return statsigCoreInstance.shutdown();
+    if (managesCoreLifecycle && statsigServer != null) {
+      return statsigServer.shutdown();
     }
     return CompletableFuture.completedFuture(null);
   }
 
-  /**
-   * Flushes events on the underlying Statsig core.
-   *
-   * <p>This method is safe to call whether the instance created its own core or attached to an
-   * existing one.
-   */
   public CompletableFuture<Void> flushEvents() {
-    if (statsigCoreInstance != null) {
-      return statsigCoreInstance.flushEvents();
+    if (managesCoreLifecycle && statsigServer != null) {
+      return statsigServer.flushEvents();
     }
     return CompletableFuture.completedFuture(null);
   }
