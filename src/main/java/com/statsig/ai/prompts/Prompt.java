@@ -4,24 +4,24 @@ import com.statsig.StatsigUser;
 
 public class Prompt {
   public final String name;
-  public PromptVariant livePrompt;
-  public PromptVariant[] candidatePrompts;
+  public PromptVersion live;
+  public PromptVersion[] candidates;
   public StatsigUser user;
 
   public Prompt(
-      String name, PromptVariant livePrompt, PromptVariant[] candidatePrompts, StatsigUser user) {
+      String name, PromptVersion livePrompt, PromptVersion[] candidatePrompts, StatsigUser user) {
     this.name = name;
-    this.livePrompt = livePrompt;
-    this.candidatePrompts = candidatePrompts;
+    this.live = livePrompt;
+    this.candidates = candidatePrompts;
     this.user = user;
   }
 
-  public PromptVariant getLivePrompt() {
-    return this.livePrompt;
+  public PromptVersion getLivePrompt() {
+    return this.live;
   }
 
-  public PromptVariant[] getCandidatePrompts() {
-    return this.candidatePrompts;
+  public PromptVersion[] getCandidatePrompts() {
+    return this.candidates;
   }
 
   public StatsigUser getUser() {

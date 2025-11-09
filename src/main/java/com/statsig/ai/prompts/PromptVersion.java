@@ -3,7 +3,7 @@ package com.statsig.ai.prompts;
 import com.statsig.DynamicConfig;
 import java.util.Map;
 
-public class PromptVariant {
+public class PromptVersion {
   private final String name;
   private final double temperature;
   private final int maxTokens;
@@ -18,7 +18,7 @@ public class PromptVariant {
   private final String aiConfigName;
   private final String id;
 
-  PromptVariant(DynamicConfig promtDefinition) {
+  PromptVersion(DynamicConfig promtDefinition) {
     this.name = promtDefinition.getString("name", "");
     this.temperature = promtDefinition.getDouble("temperature", Double.NaN);
     this.maxTokens = promtDefinition.getInt("maxTokens", Integer.MIN_VALUE);
