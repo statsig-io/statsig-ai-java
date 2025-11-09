@@ -1,9 +1,7 @@
 package com.statsig.ai;
 
-import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
-
 import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
@@ -104,17 +102,6 @@ public final class StatsigAI {
   }
 
   public Prompt getPrompt(StatsigUser user, String promptName) {
-    // TODO: inline targeting?
-    String baseParamName = "prompt:" + promptName;
-    ParameterStore parameterStore = statsigServer.getParameterStore(user, baseParamName);
-
-    String livePromptId = parameterStore.getString("live", "");
-    String[] candidatePromptIds = (String[]) parameterStore.getArray("candidates", new String[0]);
-    DynamicConfig livePromptConfig = statsigServer.getDynamicConfig(user, livePromptId);
-    PromptVersion livePromptVariant = new PromptVersion(livePromptConfig);
-
-
-
-    
+    return Prompt.makePrompt(statsigServer, user, promptName);
   }
 }

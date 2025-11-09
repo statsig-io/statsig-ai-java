@@ -1,4 +1,4 @@
-package com.statsig.ai.prompts;
+package com.statsig.ai;
 
 import static org.junit.Assert.*;
 
@@ -22,10 +22,10 @@ public class PromptTest {
   @Test
   public void promptVariantIsHydratedFromSingleConfig() throws Exception {
     JSONObject payload = loadPromptConfig();
-    PromptVersion variant = new PromptVersion(toDynamicConfig(payload));
+    PromptConfig variant = new PromptConfig(toDynamicConfig(payload));
 
     StatsigUser user = new StatsigUser();
-    Prompt prompt = new Prompt(variant.getAiConfigName(), variant, new PromptVersion[0], user);
+    Prompt prompt = new Prompt(variant.getAiConfigName(), variant, new PromptConfig[0], user);
 
     assertEquals("test_prompt", prompt.getName());
     assertEquals("Version 2", prompt.getLivePrompt().getName());
@@ -43,7 +43,7 @@ public class PromptTest {
   @Test
   public void fallbackGettersReturnProvidedDefaults() {
     DynamicConfig emptyConfig = newDynamicConfig("prompt:empty", new HashMap<>(), "userID");
-    PromptVersion variant = new PromptVersion(emptyConfig);
+    PromptConfig variant = new PromptConfig(emptyConfig);
 
     assertEquals(0.0, variant.getTemperature(), 0.0);
     assertEquals(0.75, variant.getTemperature(0.75), 0.0);
