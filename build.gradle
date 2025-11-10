@@ -11,6 +11,7 @@ dependencies {
     implementation 'com.statsig:javacore:0.11.1:uber'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'com.alibaba.fastjson2:fastjson2:2.0.48'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
 }
 
 java {
