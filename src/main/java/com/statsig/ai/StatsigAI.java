@@ -1,6 +1,7 @@
 package com.statsig.ai;
 
 import com.statsig.Statsig;
+import com.statsig.StatsigUser;
 import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
@@ -98,5 +99,9 @@ public final class StatsigAI {
       return statsigServer.flushEvents();
     }
     return CompletableFuture.completedFuture(null);
+  }
+
+  public Prompt getPrompt(StatsigUser user, String promptName) {
+    return Prompt.makePrompt(statsigServer, user, promptName);
   }
 }

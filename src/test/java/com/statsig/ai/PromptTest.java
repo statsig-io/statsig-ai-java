@@ -1,4 +1,4 @@
-package com.statsig.ai.prompts;
+package com.statsig.ai;
 
 import static org.junit.Assert.*;
 
@@ -8,11 +8,7 @@ import com.statsig.DynamicConfig;
 import com.statsig.EvaluationDetails;
 import com.statsig.StatsigUser;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
 import java.lang.reflect.Constructor;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Test;
@@ -22,10 +18,10 @@ public class PromptTest {
   @Test
   public void promptVariantIsHydratedFromSingleConfig() throws Exception {
     JSONObject payload = loadPromptConfig();
-    PromptVariant variant = new PromptVariant(toDynamicConfig(payload));
+    PromptConfig variant = new PromptConfig(toDynamicConfig(payload));
 
     StatsigUser user = new StatsigUser();
-    Prompt prompt = new Prompt(variant.getAiConfigName(), variant, new PromptVariant[0], user);
+    Prompt prompt = new Prompt(variant.getAiConfigName(), variant, new PromptConfig[0], user);
 
     assertEquals("test_prompt", prompt.getName());
     assertEquals("Version 2", prompt.getLivePrompt().getName());
@@ -43,7 +39,7 @@ public class PromptTest {
   @Test
   public void fallbackGettersReturnProvidedDefaults() {
     DynamicConfig emptyConfig = newDynamicConfig("prompt:empty", new HashMap<>(), "userID");
-    PromptVariant variant = new PromptVariant(emptyConfig);
+    PromptConfig variant = new PromptConfig(emptyConfig);
 
     assertEquals(0.0, variant.getTemperature(), 0.0);
     assertEquals(0.75, variant.getTemperature(0.75), 0.0);
@@ -67,11 +63,8 @@ public class PromptTest {
   }
 
   private static JSONObject loadPromptConfig() throws IOException {
-    try (InputStream stream = PromptTest.class.getResourceAsStream("/prompt.json")) {
-      assertNotNull("Fixture prompt.json should exist", stream);
-      String json = toString(stream);
-      return JSON.parseObject(json);
-    }
+    String json = TestUtils.readResource("/prompt.json");
+    return JSON.parseObject(json);
   }
 
   private static DynamicConfig toDynamicConfig(JSONObject payload) {
@@ -107,18 +100,6 @@ public class PromptTest {
       return ctor.newInstance(key, defaultValue, "", evaluationDetails(), idType);
     } catch (ReflectiveOperationException e) {
       throw new IllegalStateException("Failed to construct DynamicConfig", e);
-    }
-  }
-
-  private static String toString(InputStream stream) throws IOException {
-    try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
-      StringBuilder builder = new StringBuilder();
-      char[] buffer = new char[1024];
-      int read;
-      while ((read = reader.read(buffer)) != -1) {
-        builder.append(buffer, 0, read);
-      }
-      return builder.toString();
     }
   }
 }

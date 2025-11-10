@@ -25,9 +25,9 @@ public class StatsigAITest {
 
   @Test
   public void newSharedWithAttachedConfigStoresSingleton() throws Exception {
-    StatsigOptions coreOptions = new StatsigOptions.Builder().setEnableIDLists(true).build();
+    StatsigOptions coreOptions = new StatsigOptions.Builder().setDisableNetwork(true).build();
     Statsig core = new Statsig("secret-core", coreOptions);
-    StatsigInitConfig.CoreAttached config = StatsigInitConfig.attached(core);
+    StatsigInitConfig.CoreAttached config = StatsigInitConfig.coreAttached(core);
 
     StatsigAI instance = StatsigAI.newShared(config).get(1, TimeUnit.SECONDS);
 
@@ -38,11 +38,13 @@ public class StatsigAITest {
 
   @Test
   public void constructorSupportsIndependentInstances() throws Exception {
-    StatsigOptions optionsA = new StatsigOptions.Builder().build();
-    StatsigOptions optionsB = new StatsigOptions.Builder().build();
+    StatsigOptions optionsA = new StatsigOptions.Builder().setDisableNetwork(true).build();
+    StatsigOptions optionsB = new StatsigOptions.Builder().setDisableNetwork(true).build();
 
-    StatsigInitConfig.CoreIndependent configA = StatsigInitConfig.independent("secret-1", optionsA);
-    StatsigInitConfig.CoreIndependent configB = StatsigInitConfig.independent("secret-2", optionsB);
+    StatsigInitConfig.CoreIndependent configA =
+        StatsigInitConfig.coreIndependent("secret-1", optionsA);
+    StatsigInitConfig.CoreIndependent configB =
+        StatsigInitConfig.coreIndependent("secret-2", optionsB);
 
     StatsigAI first = new StatsigAI(configA);
     StatsigAI second = new StatsigAI(configB);

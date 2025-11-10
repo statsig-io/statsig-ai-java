@@ -11,11 +11,11 @@ import com.statsig.StatsigOptions;
  * its own core lifecycle, or an attached configuration that links to an existing core instance.
  */
 public interface StatsigInitConfig {
-  static CoreIndependent independent(String sdkKey, StatsigOptions statsigOptions) {
+  static CoreIndependent coreIndependent(String sdkKey, StatsigOptions statsigOptions) {
     return new CoreIndependent(sdkKey, statsigOptions);
   }
 
-  static CoreAttached attached(Statsig statsigCoreInstance) {
+  static CoreAttached coreAttached(Statsig statsigCoreInstance) {
     return new CoreAttached(statsigCoreInstance);
   }
 
