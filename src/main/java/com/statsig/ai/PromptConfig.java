@@ -15,7 +15,7 @@ public class PromptConfig {
   private final Map<String, Object> workflowBody;
   private final String evalModel;
   private final String type;
-  private final String aiConfigName;
+  private final String promptName; // aiConfigName
   private final String id;
 
   public PromptConfig(DynamicConfig promtDefinition) {
@@ -30,7 +30,7 @@ public class PromptConfig {
     this.workflowBody = promtDefinition.getMap("workflowBody", null);
     this.evalModel = promtDefinition.getString("evalModel", "");
     this.type = promtDefinition.getString("type", "");
-    this.aiConfigName = promtDefinition.getString("aiConfigName", "");
+    this.promptName = promtDefinition.getString("aiConfigName", "");
     this.id = getPromptId(promtDefinition);
   }
 
@@ -42,8 +42,8 @@ public class PromptConfig {
     return type;
   }
 
-  public String getAiConfigName() {
-    return aiConfigName;
+  public String getPromptName() {
+    return promptName;
   }
 
   public String getId() {
