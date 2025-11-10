@@ -2,6 +2,9 @@ package com.statsig.ai;
 
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
+import com.statsig.ai.internal.Utils;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
@@ -103,5 +106,31 @@ public final class StatsigAI {
 
   public Prompt getPrompt(StatsigUser user, String promptName) {
     return Prompt.makePrompt(statsigServer, user, promptName);
+  }
+
+  // ------------------------------------------------------------
+  // Eval Grade Logging
+  // ------------------------------------------------------------
+
+  public void logEvalGrade(
+      StatsigUser user,
+      PromptConfig livePrompt,
+      double score,
+      String grader,
+      AIEvalGradeData evalGradeData) {
+    if (!Utils.isValidScore(score)) {
+      System.err.println("[StatsigAI] Invalid score provided; skipping eval grade logging.");
+      return;
+    }
+
+    String promptName = livePrompt.getPromptName();
+    Map<String, String> metadata = new HashMap<>();
+    metadata.put("ai_config_name", promptName);
+    metadata.put("grader_id", grader);
+    metadata.put("score", String.valueOf(score));
+    metadata.put("version_name", livePrompt.getName());
+    metadata.put("version_id", livePrompt.getId());
+    metadata.put("session_id", evalGradeData.getSessionID());
+    this.statsigServer.logEvent(user, "statsig::eval_result", promptName, metadata);
   }
 }

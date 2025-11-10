@@ -21,7 +21,7 @@ public class PromptTest {
     PromptConfig variant = new PromptConfig(toDynamicConfig(payload));
 
     StatsigUser user = new StatsigUser();
-    Prompt prompt = new Prompt(variant.getAiConfigName(), variant, new PromptConfig[0], user);
+    Prompt prompt = new Prompt(variant.getPromptName(), variant, new PromptConfig[0], user);
 
     assertEquals("test_prompt", prompt.getName());
     assertEquals("Version 2", prompt.getLivePrompt().getName());
