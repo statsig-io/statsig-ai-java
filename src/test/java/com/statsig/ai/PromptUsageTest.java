@@ -1,19 +1,12 @@
 package com.statsig.ai;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
 
 import com.statsig.OutputLogger;
 import com.statsig.Statsig;
 import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -24,11 +17,10 @@ import org.junit.Test;
 public class PromptUsageTest {
   private MockWebServer mockWebServer;
   private Statsig statsigCore;
-  private StatsigUser testUser;
 
   @Before
   public void setUp() throws IOException, InterruptedException, ExecutionException {
-    String downloadConfigSpecsJson = readResource("/eval_proj_dcs.json");
+    String downloadConfigSpecsJson = TestUtils.readResource("/eval_proj_dcs.json");
 
     mockWebServer = new MockWebServer();
     mockWebServer.start();
@@ -38,16 +30,6 @@ public class PromptUsageTest {
             .setResponseCode(200)
             .setHeader("Content-Type", "application/json")
             .setBody(downloadConfigSpecsJson));
-
-    Map<String, Object> custom = new HashMap<>();
-    custom.put("custom_field", "custom_value");
-
-    testUser =
-        new StatsigUser.Builder()
-            .setUserID("test_user_id")
-            .setEmail("test@example.com")
-            .setCustom(custom)
-            .build();
 
     StatsigOptions options =
         new StatsigOptions.Builder()
@@ -81,20 +63,5 @@ public class PromptUsageTest {
     assertEquals("Version 2", prompt.getCandidatePrompts()[0].getName());
     assertEquals("7CKLvQvOwjj2vjx12gFO0Z", prompt.getCandidatePrompts()[1].getId());
     assertEquals("Version 3", prompt.getCandidatePrompts()[1].getName());
-  }
-
-  private static String readResource(String resourcePath) throws IOException {
-    try (InputStream stream = StatsigAITest.class.getResourceAsStream(resourcePath)) {
-      assertNotNull("Expected resource " + resourcePath + " to exist", stream);
-      try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
-        StringBuilder builder = new StringBuilder();
-        char[] buffer = new char[1024];
-        int read;
-        while ((read = reader.read(buffer)) != -1) {
-          builder.append(buffer, 0, read);
-        }
-        return builder.toString();
-      }
-    }
   }
 }
