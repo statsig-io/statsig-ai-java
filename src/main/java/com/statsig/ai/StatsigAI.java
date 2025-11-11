@@ -1,5 +1,6 @@
 package com.statsig.ai;
 
+import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.internal.Utils;
@@ -14,6 +15,8 @@ public final class StatsigAI {
   private final Statsig statsigServer;
   // True when this AI instance created the Statsig core itself and must manage its lifecycle
   private final boolean managesCoreLifecycle;
+  // for inline targeting depth limit
+  private static final int MAX_DEPTH = 300;
 
   /**
    * Creates an instance that is not managed by the static shared singleton.
@@ -105,7 +108,9 @@ public final class StatsigAI {
   }
 
   public Prompt getPrompt(StatsigUser user, String promptName) {
-    return Prompt.makePrompt(statsigServer, user, promptName);
+    String targetingParamStoreName = resolvePromptTargetingRules(user, promptName);
+    String targetPromptName = targetingParamStoreName.split(":")[1];
+    return Prompt.makePrompt(statsigServer, user, targetPromptName);
   }
 
   // ------------------------------------------------------------
@@ -132,5 +137,49 @@ public final class StatsigAI {
     metadata.put("version_id", livePrompt.getId());
     metadata.put("session_id", evalGradeData.getSessionID());
     this.statsigServer.logEvent(user, "statsig::eval_result", promptName, metadata);
+  }
+
+  // ------------------------------------------------------------
+  // Helper methods
+  // ------------------------------------------------------------
+
+  private String resolvePromptTargetingRules(StatsigUser user, String promptName) {
+    String baseParamStoreName = "prompt:" + promptName;
+    String currentParamStoreName = baseParamStoreName;
+
+    ParameterStore currentParamStore = statsigServer.getParameterStore(user, currentParamStoreName);
+    String nextParamStoreName = currentParamStore.getString("prompt_targeting_rules", "");
+
+    int depth = 0;
+
+    while (nextParamStoreName != null
+        && !nextParamStoreName.isEmpty()
+        && !nextParamStoreName.equals(currentParamStoreName)
+        && depth < MAX_DEPTH) {
+      ParameterStore nextParamStore = statsigServer.getParameterStore(user, nextParamStoreName);
+      String possibleNextParamStoreName = nextParamStore.getString("prompt_targeting_rules", "");
+
+      if (possibleNextParamStoreName == null
+          || possibleNextParamStoreName.isEmpty()
+          || possibleNextParamStoreName.equals(nextParamStoreName)) {
+        currentParamStoreName = nextParamStoreName;
+        break;
+      }
+
+      currentParamStoreName = nextParamStoreName;
+      nextParamStoreName = possibleNextParamStoreName;
+
+      depth++;
+    }
+
+    if (depth >= MAX_DEPTH) {
+      System.err.printf(
+          "[StatsigAI] Max targeting depth (%d) reached while resolving prompt: %s. "
+              + "Possible circular reference starting from \"%s\".%n",
+          MAX_DEPTH, promptName, baseParamStoreName);
+      currentParamStoreName = baseParamStoreName;
+    }
+
+    return currentParamStoreName;
   }
 }
