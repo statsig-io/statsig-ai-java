@@ -19,7 +19,7 @@ public class StatsigOTLPTraceExporterOptions {
    * Constructor for the StatsigOTLPTraceExporterOptions class.
    *
    * @param sdkKey The SDK key to use for the exporter.
-   * @param endpoint The endpoint to use for the exporter.
+   * @param customEndpoint The customized endpoint to use for the exporter.
    */
   public StatsigOTLPTraceExporterOptions(String sdkKey, String customEndpoint) {
     this.sdkKey = sdkKey;
