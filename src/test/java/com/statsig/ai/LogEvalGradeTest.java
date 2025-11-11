@@ -85,9 +85,18 @@ public class LogEvalGradeTest {
     String body = readBody(logRequest);
     JSONObject payload = JSON.parseObject(body);
     JSONArray events = payload.getJSONArray("events");
-    // assertEquals(1, events.size());
+    assertNotNull("Expected events array in log payload", events);
 
-    JSONObject event = events.getJSONObject(5); // TODO: Fix this, now it's hack
+    // find the eval_result event
+    JSONObject event = null;
+    for (int i = 0; i < events.size(); i++) {
+      JSONObject candidate = events.getJSONObject(i);
+      if ("statsig::eval_result".equals(candidate.getString("eventName"))) {
+        event = candidate;
+        break;
+      }
+    }
+    assertNotNull("Expected statsig::eval_result event in log payload", event);
     assertEquals("statsig::eval_result", event.getString("eventName"));
     assertEquals("test_prompt", event.getString("value"));
 
