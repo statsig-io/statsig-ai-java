@@ -1,4 +1,4 @@
-package com.statsig.ai.trace;
+package com.statsig.ai.trace.options;
 
 public class StatsigOTLPTraceExporterOptions {
   private static final String DEFAULT_OTEL_ENDPOINT = "https://api.statsig.com/otlp";

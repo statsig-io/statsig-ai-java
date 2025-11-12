@@ -5,6 +5,9 @@ import static org.junit.Assert.assertSame;
 
 import org.junit.Test;
 
+import com.statsig.ai.trace.options.InitializeTracingOptions;
+import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
+
 public class InitializeTracingOptionsTest {
 
   @Test

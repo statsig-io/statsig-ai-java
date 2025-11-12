@@ -1,4 +1,4 @@
-package com.statsig.ai.trace;
+package com.statsig.ai.trace.options;
 
 /** Configuration for initializing OpenTelemetry tracing with Statsig defaults. */
 public final class InitializeTracingOptions {
