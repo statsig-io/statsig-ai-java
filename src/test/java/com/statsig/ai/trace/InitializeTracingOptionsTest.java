@@ -3,6 +3,8 @@ package com.statsig.ai.trace;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 
+import com.statsig.ai.trace.options.InitializeTracingOptions;
+import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
 import org.junit.Test;
 
 public class InitializeTracingOptionsTest {
