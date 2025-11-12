@@ -1,5 +1,3 @@
 package com.statsig.ai.trace;
 
-public class Otel {
-
-}
+public class Otel {}
