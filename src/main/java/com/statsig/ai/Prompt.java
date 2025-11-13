@@ -4,6 +4,12 @@ import com.statsig.DynamicConfig;
 import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
+import com.statsig.ai.trace.StatsigContextUtils;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 public class Prompt {
   public final String name;
@@ -32,6 +38,44 @@ public class Prompt {
 
   public String getName() {
     return this.name;
+  }
+
+  public <R> R withLive(Function<PromptConfig, R> block) {
+    Objects.requireNonNull(block, "block");
+    Context ctx = Context.current();
+    ctx = StatsigContextUtils.withPrompt(ctx, this.name, this.live.getName());
+    ctx = StatsigContextUtils.withUser(ctx, this.user);
+    try (Scope scope = ctx.makeCurrent()) {
+      return block.apply(this.live);
+    }
+  }
+
+  public void withLive(java.util.function.Consumer<PromptConfig> consumer) {
+    Objects.requireNonNull(consumer, "consumer");
+    withLive(
+        liveConfig -> {
+          consumer.accept(liveConfig);
+          return null;
+        });
+  }
+
+  public <R> R withContext(Supplier<R> supplier) {
+    Objects.requireNonNull(supplier, "supplier");
+    Context ctx = Context.current();
+    ctx = StatsigContextUtils.withPrompt(ctx, this.name, null);
+    ctx = StatsigContextUtils.withUser(ctx, this.user);
+    try (Scope scope = ctx.makeCurrent()) {
+      return supplier.get();
+    }
+  }
+
+  public void withContext(Runnable runnable) {
+    Objects.requireNonNull(runnable, "runnable");
+    withContext(
+        () -> {
+          runnable.run();
+          return null;
+        });
   }
 
   static Prompt makePrompt(Statsig statsigServer, StatsigUser user, String promptName) {
