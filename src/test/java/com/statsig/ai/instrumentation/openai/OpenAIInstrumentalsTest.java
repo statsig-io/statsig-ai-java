@@ -12,7 +12,7 @@ public class OpenAIInstrumentalsTest {
   @Test
   public void wrapReturnsOriginalClientForNow() {
     OpenAIClient client = Mockito.mock(OpenAIClient.class);
-    OpenAIClient wrapped = OpenAIInstrumentals.wrap(client);
+    OpenAIClient wrapped = OpenAIWrapper.wrap(client);
     assertSame(client, wrapped);
   }
 
@@ -20,8 +20,8 @@ public class OpenAIInstrumentalsTest {
   public void wrapValidatesInputs() {
     assertThrows(
         NullPointerException.class,
-        () -> OpenAIInstrumentals.wrap(null, OpenAIWrapperConfig.builder().build()));
+        () -> OpenAIWrapper.wrap(null, OpenAIWrapperConfig.builder().build()));
     OpenAIClient client = Mockito.mock(OpenAIClient.class);
-    assertThrows(NullPointerException.class, () -> OpenAIInstrumentals.wrap(client, null));
+    assertThrows(NullPointerException.class, () -> OpenAIWrapper.wrap(client, null));
   }
 }
