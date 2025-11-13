@@ -7,7 +7,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.statsig.DynamicConfig;
 import com.statsig.EvaluationDetails;
 import com.statsig.StatsigUser;
-import com.statsig.ai.instrumentation.context.UserContext;
+import com.statsig.ai.trace.UserContext;
 import com.statsig.ai.trace.StatsigContextUtils;
 import com.statsig.ai.trace.StatsigTraceConventions;
 import io.opentelemetry.context.Context;
