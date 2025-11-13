@@ -7,7 +7,7 @@ import com.openai.client.OpenAIClient;
 import org.junit.Test;
 import org.mockito.Mockito;
 
-public class OpenAIInstrumentalsTest {
+public class OpenAIWrapperTest {
 
   @Test
   public void wrapReturnsOriginalClientForNow() {
