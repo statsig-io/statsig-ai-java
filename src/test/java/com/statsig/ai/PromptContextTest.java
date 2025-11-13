@@ -7,9 +7,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.statsig.DynamicConfig;
 import com.statsig.EvaluationDetails;
 import com.statsig.StatsigUser;
-import com.statsig.ai.instrumentation.StatsigTraceConventions;
-import com.statsig.ai.instrumentation.context.StatsigContextUtils;
 import com.statsig.ai.instrumentation.context.UserContext;
+import com.statsig.ai.trace.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigTraceConventions;
 import io.opentelemetry.context.Context;
 import java.lang.reflect.Constructor;
 import java.util.HashMap;
@@ -26,8 +26,7 @@ public class PromptContextTest {
         live -> {
           Context ctx = Context.current();
           assertEquals(prompt.getName(), ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT));
-          assertEquals(
-              live.getName(), ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION));
+          assertEquals(live.getName(), ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION));
 
           UserContext userCtx = StatsigContextUtils.getActiveUser(ctx);
           assertNotNull(userCtx);

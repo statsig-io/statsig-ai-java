@@ -4,7 +4,7 @@ import com.statsig.DynamicConfig;
 import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
-import com.statsig.ai.instrumentation.context.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigContextUtils;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import java.util.Objects;

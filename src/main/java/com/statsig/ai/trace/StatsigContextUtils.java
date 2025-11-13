@@ -1,7 +1,6 @@
-package com.statsig.ai.instrumentation.context;
+package com.statsig.ai.trace;
 
 import com.statsig.StatsigUser;
-import com.statsig.ai.instrumentation.StatsigTraceConventions;
 import io.opentelemetry.context.Context;
 import java.util.Collections;
 import java.util.Map;

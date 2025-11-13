@@ -1,4 +1,4 @@
-package com.statsig.ai.instrumentation;
+package com.statsig.ai.trace;
 
 import com.statsig.ai.instrumentation.context.UserContext;
 import io.opentelemetry.context.ContextKey;

@@ -1,4 +1,4 @@
-package com.statsig.ai.instrumentation.context;
+package com.statsig.ai.trace;
 
 import java.util.Collections;
 import java.util.Map;
@@ -11,7 +11,8 @@ public final class UserContext {
 
   public UserContext(String userID, Map<String, String> customIDs) {
     this.userID = userID != null ? userID : "unknown";
-    this.customIDs = customIDs != null ? Collections.unmodifiableMap(customIDs) : Collections.emptyMap();
+    this.customIDs =
+        customIDs != null ? Collections.unmodifiableMap(customIDs) : Collections.emptyMap();
   }
 
   public String getUserID() {
