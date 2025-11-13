@@ -182,4 +182,13 @@ public final class StatsigAI {
 
     return currentParamStoreName;
   }
+
+  /**
+   * Returns the underlying Statsig core instance for advanced integrations (e.g. telemetry).
+   *
+   * <p>May be {@code null} if initialization failed or an invalid config was provided.
+   */
+  public Statsig getStatsig() {
+    return this.statsigServer;
+  }
 }
