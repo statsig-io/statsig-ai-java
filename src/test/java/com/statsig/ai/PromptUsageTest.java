@@ -2,49 +2,43 @@ package com.statsig.ai;
 
 import static org.junit.Assert.assertEquals;
 
-import com.statsig.OutputLogger;
 import com.statsig.Statsig;
 import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
+import com.statsig.ai.testutil.MockScrapiServer;
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 public class PromptUsageTest {
-  private MockWebServer mockWebServer;
+  private MockScrapiServer scrapi;
   private Statsig statsigCore;
 
   @Before
   public void setUp() throws IOException, InterruptedException, ExecutionException {
-    String downloadConfigSpecsJson = TestUtils.readResource("/eval_proj_dcs.json");
-
-    mockWebServer = new MockWebServer();
-    mockWebServer.start();
-
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(downloadConfigSpecsJson));
+    scrapi = MockScrapiServer.create();
+    scrapi.start();
+    scrapi.enqueueDownloadConfigSpecsResource("/eval_proj_dcs.json");
 
     StatsigOptions options =
-        new StatsigOptions.Builder()
-            .setSpecsUrl(mockWebServer.url("/v2/download_config_specs").toString())
-            .setOutputLoggerLevel(OutputLogger.LogLevel.DEBUG)
-            .build();
+        new StatsigOptions.Builder().setSpecsUrl(scrapi.url("/v2/download_config_specs")).build();
 
     statsigCore = new Statsig("secret-test-key", options);
     statsigCore.initialize().get();
   }
 
   @After
-  public void tearDown() throws IOException, InterruptedException, ExecutionException {
-    statsigCore.shutdown().get();
-    mockWebServer.shutdown();
+  public void tearDown() throws Exception {
+    if (statsigCore != null) {
+      statsigCore.shutdown().get();
+      statsigCore = null;
+    }
+    if (scrapi != null) {
+      scrapi.close();
+      scrapi = null;
+    }
   }
 
   @Test

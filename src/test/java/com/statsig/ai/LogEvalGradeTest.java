@@ -6,10 +6,10 @@ import static org.junit.Assert.assertNotNull;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
-import com.statsig.OutputLogger;
 import com.statsig.Statsig;
 import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
+import com.statsig.ai.testutil.MockScrapiServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -17,39 +17,31 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 public class LogEvalGradeTest {
-  private MockWebServer mockWebServer;
+  private MockScrapiServer scrapi;
   private Statsig statsigCore;
+  private StatsigAI statsigAI;
 
   @Before
   public void setUp() throws IOException, InterruptedException, ExecutionException {
-    String downloadConfigSpecsJson = TestUtils.readResource("/eval_proj_dcs.json");
-
-    mockWebServer = new MockWebServer();
-    mockWebServer.start();
-
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(downloadConfigSpecsJson));
+    scrapi = MockScrapiServer.create();
+    scrapi.start();
+    scrapi.enqueueDownloadConfigSpecsResource("/eval_proj_dcs.json");
 
     StatsigOptions options =
         new StatsigOptions.Builder()
-            .setSpecsUrl(mockWebServer.url("/v2/download_config_specs").toString())
-            .setLogEventUrl(mockWebServer.url("/v1/log_event").toString())
-            .setOutputLoggerLevel(OutputLogger.LogLevel.DEBUG)
+            .setSpecsUrl(scrapi.url("/v2/download_config_specs"))
+            .setLogEventUrl(scrapi.url("/v1/log_event"))
             .build();
 
     statsigCore = new Statsig("secret-test-key", options);
     statsigCore.initialize().get();
+    statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
   }
 
   @After
@@ -58,17 +50,17 @@ public class LogEvalGradeTest {
       statsigCore.shutdown().get();
       statsigCore = null;
     }
-    if (mockWebServer != null) {
-      mockWebServer.shutdown();
-      mockWebServer = null;
+    if (scrapi != null) {
+      scrapi.close();
+      scrapi = null;
     }
+    statsigAI = null;
   }
 
   @Test
   public void logEvalGradeSendsEvalResultEvent() throws Exception {
-    mockWebServer.enqueue(new MockResponse().setResponseCode(200));
+    scrapi.enqueueLogEventResponse(200);
 
-    StatsigAI statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test_prompt");
@@ -77,8 +69,8 @@ public class LogEvalGradeTest {
     statsigAI.logEvalGrade(user, livePrompt, 0.8, "grader_123", new AIEvalGradeData("session-abc"));
     statsigCore.flushEvents().get();
 
-    mockWebServer.takeRequest(2, TimeUnit.SECONDS);
-    RecordedRequest logRequest = mockWebServer.takeRequest(2, TimeUnit.SECONDS);
+    scrapi.takeRequest(2, TimeUnit.SECONDS);
+    RecordedRequest logRequest = scrapi.takeRequest(2, TimeUnit.SECONDS);
     assertNotNull("Expected a log_event request", logRequest);
     assertEquals("/v1/log_event", logRequest.getPath());
 

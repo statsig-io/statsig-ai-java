@@ -8,43 +8,37 @@ import com.statsig.OutputLogger;
 import com.statsig.Statsig;
 import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
+import com.statsig.ai.testutil.MockScrapiServer;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 public class PromptTargetingTest {
-  private MockWebServer mockWebServer;
+  private MockScrapiServer scrapi;
   private Statsig statsigCore;
+  private StatsigAI statsigAI;
 
   @Before
   public void setUp() throws IOException, InterruptedException, ExecutionException {
-    String downloadConfigSpecsJson = TestUtils.readResource("/eval_proj_dcs_targeting.json");
-
-    mockWebServer = new MockWebServer();
-    mockWebServer.start();
-
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .setHeader("Content-Type", "application/json")
-            .setBody(downloadConfigSpecsJson));
+    scrapi = MockScrapiServer.create();
+    scrapi.start();
+    scrapi.enqueueDownloadConfigSpecsResource("/eval_proj_dcs_targeting.json");
 
     StatsigOptions options =
         new StatsigOptions.Builder()
-            .setSpecsUrl(mockWebServer.url("/v2/download_config_specs").toString())
+            .setSpecsUrl(scrapi.url("/v2/download_config_specs"))
             .setOutputLoggerLevel(OutputLogger.LogLevel.DEBUG)
             .build();
 
     statsigCore = new Statsig("secret-test-key", options);
     statsigCore.initialize().get();
+    statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
   }
 
   @After
@@ -53,15 +47,15 @@ public class PromptTargetingTest {
       statsigCore.shutdown().get();
       statsigCore = null;
     }
-    if (mockWebServer != null) {
-      mockWebServer.shutdown();
-      mockWebServer = null;
+    if (scrapi != null) {
+      scrapi.close();
+      scrapi = null;
     }
+    statsigAI = null;
   }
 
   @Test
   public void promptTargetingResolvesDirectRules() throws Exception {
-    StatsigAI statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
     StatsigUser user = new StatsigUser.Builder().setUserID("test-user").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test-prompt-1");
@@ -91,7 +85,6 @@ public class PromptTargetingTest {
 
   @Test
   public void promptTargetingResolvesNestedRules() throws Exception {
-    StatsigAI statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
     StatsigUser user = new StatsigUser.Builder().setUserID("test-user-1").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test-prompt-1");
@@ -121,7 +114,6 @@ public class PromptTargetingTest {
 
   @Test
   public void promptTargetingHandlesCircularRulesGracefully() throws Exception {
-    StatsigAI statsigAI = new StatsigAI(StatsigInitConfig.coreAttached(statsigCore));
     StatsigUser user = new StatsigUser.Builder().setUserID("test-user-circular").build();
 
     ByteArrayOutputStream errContent = new ByteArrayOutputStream();
