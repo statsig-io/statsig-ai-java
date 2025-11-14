@@ -1,6 +1,7 @@
 package com.statsig.ai.instrumentation.openai;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 /** Basic configuration object for future OpenAI instrumentation hooks. */
@@ -11,7 +12,7 @@ public final class OpenAIWrapperConfig {
     this.defaultAttributes =
         builder.defaultAttributes == null
             ? Collections.emptyMap()
-            : Collections.unmodifiableMap(builder.defaultAttributes);
+            : Collections.unmodifiableMap(new HashMap<>(builder.defaultAttributes));
   }
 
   public Map<String, String> getDefaultAttributes() {
