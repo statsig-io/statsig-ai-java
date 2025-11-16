@@ -21,7 +21,9 @@ public final class OpenAIAttributes {
   public static void applyRequestAttributes(
       SpanTelemetry span, String operationName, Object params) {
 
-    if (span == null || params == null) return;
+    if (span == null || params == null) {
+      return;
+    }
 
     span.setAttribute("gen_ai.operation.name", operationName);
     span.setAttribute("gen_ai.request.model", readString(params, "model"));
@@ -96,7 +98,9 @@ public final class OpenAIAttributes {
 
   /** Extracts attributes from OpenAI ChatCompletion response. */
   public static void applyResponseAttributes(SpanTelemetry span, Object response) {
-    if (span == null || response == null) return;
+    if (span == null || response == null) {
+      return;
+    }
 
     span.setAttribute("gen_ai.response.id", readString(response, "id"));
 
@@ -123,10 +127,14 @@ public final class OpenAIAttributes {
 
   /** Extracts usage metrics from response. */
   public static void applyUsageAttributes(SpanTelemetry span, Object response) {
-    if (span == null || response == null) return;
+    if (span == null || response == null) {
+      return;
+    }
 
     Object usage = readValue(response, "usage");
-    if (usage == null) return;
+    if (usage == null) {
+      return;
+    }
 
     setNumber(
         span,
@@ -145,11 +153,15 @@ public final class OpenAIAttributes {
   // ======================================================
 
   private static void setNumber(SpanTelemetry span, String key, Number value) {
-    if (value != null) span.setAttribute(key, value);
+    if (value != null) {
+      span.setAttribute(key, value);
+    }
   }
 
   private static List<String> filterMessagesByRole(Object messages, String role) {
-    if (!(messages instanceof List<?>) || role == null) return null;
+    if (!(messages instanceof List<?>) || role == null) {
+      return null;
+    }
 
     List<String> filtered = new ArrayList<>();
     for (Object msg : (List<?>) messages) {
@@ -169,12 +181,15 @@ public final class OpenAIAttributes {
 
   private static Number readNumber(Object target, String... methods) {
     Object v = readValue(target, methods);
-    if (v instanceof Number) return (Number) v;
+    if (v instanceof Number) {
+      return (Number) v;
+    }
     if (v instanceof String) {
       try {
         String s = (String) v;
         return s.contains(".") ? Double.parseDouble(s) : Long.parseLong(s);
       } catch (Exception ignore) {
+        // ignore
       }
     }
     return null;
@@ -182,14 +197,21 @@ public final class OpenAIAttributes {
 
   private static List<?> readList(Object target, String... methods) {
     Object v = readValue(target, methods);
-    return (v instanceof List<?>) ? (List<?>) v : null;
+    if (v instanceof List<?>) {
+      return (List<?>) v;
+    }
+    return null;
   }
 
   private static Object readValue(Object target, String... methodNames) {
-    if (target == null) return null;
+    if (target == null) {
+      return null;
+    }
 
     for (String name : methodNames) {
-      if (name == null) continue;
+      if (name == null) {
+        continue;
+      }
       try {
         Method m = target.getClass().getMethod(name);
         Object value = m.invoke(target);
