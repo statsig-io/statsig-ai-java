@@ -8,8 +8,8 @@ import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -26,9 +26,7 @@ public class OpenAIAttributesTest {
   public void setUp() {
     exporter = InMemorySpanExporter.create();
     tracerProvider =
-        SdkTracerProvider.builder()
-            .addSpanProcessor(SimpleSpanProcessor.create(exporter))
-            .build();
+        SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
   }
 
   @After
@@ -60,10 +58,8 @@ public class OpenAIAttributesTest {
     assertEquals(
         256L,
         data.getAttributes().get(AttributeKey.longKey("gen_ai.request.max_tokens")).longValue());
-    assertNotNull(
-        data.getAttributes().get(AttributeKey.stringKey("gen_ai.input.messages")));
-    String toolDefs =
-        data.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.definitions"));
+    assertNotNull(data.getAttributes().get(AttributeKey.stringKey("gen_ai.input.messages")));
+    String toolDefs = data.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.definitions"));
     assertNotNull(toolDefs);
     assertTrue(toolDefs.contains("search_tool"));
   }
@@ -84,11 +80,9 @@ public class OpenAIAttributesTest {
     telemetry.end();
 
     SpanData data = exporter.getFinishedSpanItems().get(0);
+    assertEquals("resp-id", data.getAttributes().get(AttributeKey.stringKey("gen_ai.response.id")));
     assertEquals(
-        "resp-id", data.getAttributes().get(AttributeKey.stringKey("gen_ai.response.id")));
-    assertEquals(
-        "gpt-4o-mini",
-        data.getAttributes().get(AttributeKey.stringKey("gen_ai.response.model")));
+        "gpt-4o-mini", data.getAttributes().get(AttributeKey.stringKey("gen_ai.response.model")));
     assertEquals(
         Arrays.asList("stop"),
         data.getAttributes().get(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons")));
