@@ -18,7 +18,8 @@ public class InitializeTracingOptionsTest {
         InitializeTracingOptions.builder().setExporterOptions(exporterOptions).build();
 
     assertSame(exporterOptions, options.getExporterOptions());
-    assertEquals("https://api.statsig.com/otlp", options.getExporterOptions().getEndpoint());
+    assertEquals(
+        "https://api.statsig.com/otlp/v1/traces", options.getExporterOptions().getEndpoint());
     assertEquals("secret-test-key", options.getExporterOptions().getSdkKey());
   }
 
