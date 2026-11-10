@@ -17,8 +17,17 @@ public class PromptConfig {
   private final String type;
   private final String promptName; // aiConfigName
   private final String id;
+  private final boolean isLiveForUser;
 
   public PromptConfig(DynamicConfig promtDefinition) {
+    this(promtDefinition, false);
+  }
+
+  /**
+   * @param isLiveForUser {@code true} when this is the live version served to the user, {@code
+   *     false} for a candidate.
+   */
+  public PromptConfig(DynamicConfig promtDefinition, boolean isLiveForUser) {
     this.name = promtDefinition.getString("name", "");
     this.temperature = promtDefinition.getDouble("temperature", Double.NaN);
     this.maxTokens = promtDefinition.getInt("maxTokens", Integer.MIN_VALUE);
@@ -32,6 +41,7 @@ public class PromptConfig {
     this.type = promtDefinition.getString("type", "");
     this.promptName = promtDefinition.getString("aiConfigName", "");
     this.id = getPromptId(promtDefinition);
+    this.isLiveForUser = isLiveForUser;
   }
 
   // ------------------------------------------------------------
@@ -52,6 +62,11 @@ public class PromptConfig {
 
   public String getName() {
     return name;
+  }
+
+  /** Whether this is the live version served to the user, as opposed to a candidate. */
+  public boolean isLiveForUser() {
+    return isLiveForUser;
   }
 
   // ------------------------------------------------------------
