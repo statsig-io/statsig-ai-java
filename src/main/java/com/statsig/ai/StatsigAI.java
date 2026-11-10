@@ -5,8 +5,10 @@ import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.internal.Utils;
 import com.statsig.ai.trace.StatsigTraceConventions;
+import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.sdk.common.CompletableResultCode;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -96,18 +98,41 @@ public final class StatsigAI {
     return CompletableFuture.completedFuture(null);
   }
 
+  /**
+   * Shuts down the Statsig core (when this instance created it) and flushes pending trace spans.
+   * The tracer provider itself is left running.
+   */
   public CompletableFuture<Void> shutdown() {
-    if (managesCoreLifecycle && statsigServer != null) {
-      return statsigServer.shutdown();
-    }
-    return CompletableFuture.completedFuture(null);
+    CompletableFuture<Void> core =
+        managesCoreLifecycle && statsigServer != null
+            ? statsigServer.shutdown()
+            : CompletableFuture.completedFuture(null);
+    return CompletableFuture.allOf(core, flushTraces());
   }
 
+  /**
+   * Flushes the Statsig core's events (when this instance created the core) and pending trace
+   * spans, so eval grades and the traces they reference are sent together.
+   */
   public CompletableFuture<Void> flushEvents() {
-    if (managesCoreLifecycle && statsigServer != null) {
-      return statsigServer.flushEvents();
-    }
-    return CompletableFuture.completedFuture(null);
+    CompletableFuture<Void> core =
+        managesCoreLifecycle && statsigServer != null
+            ? statsigServer.flushEvents()
+            : CompletableFuture.completedFuture(null);
+    return CompletableFuture.allOf(core, flushTraces());
+  }
+
+  private static CompletableFuture<Void> flushTraces() {
+    CompletableFuture<Void> future = new CompletableFuture<>();
+    CompletableResultCode result = OtelSingleton.flushInstance();
+    result.whenComplete(
+        () -> {
+          if (!result.isSuccess()) {
+            System.err.println("[StatsigAI] Failed to flush trace spans.");
+          }
+          future.complete(null);
+        });
+    return future;
   }
 
   public Prompt getPrompt(StatsigUser user, String promptName) {

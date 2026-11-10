@@ -1,6 +1,8 @@
 package com.statsig.ai.trace.singleton;
 
 import io.opentelemetry.api.trace.TracerProvider;
+import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 
 /**
  * Holds a global OtelSingleton instance that provides a TracerProvider. If not instantiated,
@@ -43,6 +45,19 @@ public class OtelSingleton {
 
   public static TracerProvider getTracerProviderStatic() {
     return getInstance().getTracerProvider();
+  }
+
+  /**
+   * Force-flushes pending spans when the stored tracer provider is an {@link SdkTracerProvider}.
+   * Does not shut the provider down. Succeeds immediately when there is nothing to flush.
+   */
+  public static CompletableResultCode flushInstance() {
+    // Read the field directly so an uninitialized singleton doesn't log the no-op warning.
+    OtelSingleton current = instance;
+    if (current != null && current.tracerProvider instanceof SdkTracerProvider) {
+      return ((SdkTracerProvider) current.tracerProvider).forceFlush();
+    }
+    return CompletableResultCode.ofSuccess();
   }
 
   /** For testing or reset scenarios only. */
