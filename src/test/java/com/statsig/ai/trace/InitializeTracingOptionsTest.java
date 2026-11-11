@@ -1,6 +1,7 @@
 package com.statsig.ai.trace;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 
 import com.statsig.ai.trace.options.InitializeTracingOptions;
@@ -35,5 +36,13 @@ public class InitializeTracingOptionsTest {
     assertSame(exporterOptions, actualExporterOptions);
     assertEquals("https://api.fake.com/otlp/v1/traces", actualExporterOptions.getEndpoint());
     assertEquals("secret-another", actualExporterOptions.getSdkKey());
+  }
+
+  @Test
+  public void builderSetsEnvironment() {
+    assertNull(InitializeTracingOptions.builder().build().getEnvironment());
+    assertEquals(
+        "production",
+        InitializeTracingOptions.builder().setEnvironment("production").build().getEnvironment());
   }
 }

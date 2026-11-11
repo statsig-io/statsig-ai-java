@@ -60,15 +60,102 @@ prompt.withLive(live -> {
 
 ## Instrumentation (early preview)
 
-The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIInstrumentals.wrap`, currently performs basic validation and will add tracing/exporting logic in upcoming releases.
+The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span.
 
 ```java
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.statsig.ai.instrumentation.openai.OpenAIInstrumentals;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapper;
 
 OpenAIClient rawClient = OpenAIOkHttpClient.fromEnv();
-OpenAIClient wrapped = OpenAIInstrumentals.wrap(rawClient);
+OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
+```
+
+## Tracing
+
+`Otel.initialize` exports spans to Statsig and registers the tracer provider globally.
+
+```java
+import com.statsig.ai.trace.Otel;
+import com.statsig.ai.trace.options.InitializeTracingOptions;
+import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
+
+Otel.initialize(
+    InitializeTracingOptions.builder()
+        .setExporterOptions(new StatsigOTLPTraceExporterOptions("your-server-sdk-key"))
+        .setEnvironment("production")
+        .build());
+```
+
+The context helpers below are static methods on `com.statsig.ai.trace.StatsigContextUtils`. Each one runs a `Supplier` and returns its result, or runs a `Runnable`. The overloads that take a `Context` return the new context instead, for code that manages its own scopes.
+
+### Statsig context
+
+Run code inside `withStatsigContext(user, activityID, ...)` to attribute the model calls it makes. Model call spans from `OpenAIWrapper`, and their `statsig::gen_ai` events, get `statsig.user_id` and `statsig.custom_ids` (the user's custom IDs as JSON). The activity ID is added to the custom IDs as `statsig.activity_id`. Pass a null user when there's only an activity ID.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigContext;
+
+ChatCompletion completion =
+    withStatsigContext(user, "conversation-123", () -> openai.chat().completions().create(params));
+```
+
+To tag every span with the user, not only model calls, run the code inside `withStatsigUserContext(user, ...)`. The span processor that `Otel.initialize` installs adds `statsig.user_id` and `statsig.custom_ids` to each span started inside it. `Prompt.withLive(...)` and `Prompt.withContext(...)` do the same for the prompt's user.
+
+### Marking the environment
+
+The `environment` option of `InitializeTracingOptions` is recorded on the resource as `deployment.environment.name` and `env`. To tag only some spans, for example evals running in the same process as production code, run that code inside `withStatsigEnvironment`. Spans started inside it get a `statsig.environment` attribute, which overrides the resource value for those spans.
+
+Use `production` for live traffic. `eval` and `online_eval_judge` are reserved for spans Statsig generates.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigEnvironment;
+
+withStatsigEnvironment("staging_canary", () -> handleRequest(request));
+```
+
+### Joining a Statsig eval trace
+
+A workflow eval sends each dataset row to your endpoint as a POST request. To show your agent's model calls under the eval row in the trace drawer, run the handler inside `withIncomingTraceContext`. It reads the W3C `traceparent` and `tracestate` request headers, so spans started inside it become children of the eval row's span. Pass the headers as a `Map<String, String>` (names are matched case-insensitively) or as a header getter such as a servlet request's `getHeader`. If there's no valid `traceparent`, the handler runs as usual.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withIncomingTraceContext;
+
+// Servlet
+@Override
+protected void doPost(HttpServletRequest request, HttpServletResponse response)
+    throws IOException {
+  String input = request.getReader().lines().collect(Collectors.joining("\n"));
+  String output = withIncomingTraceContext(request::getHeader, () -> runAgent(input));
+  response.getWriter().write(output);
+}
+
+// Spring
+@PostMapping("/agent")
+public AgentResponse agent(@RequestHeader HttpHeaders headers, @RequestBody AgentRequest body) {
+  return withIncomingTraceContext(headers::getFirst, () -> runAgent(body));
+}
+```
+
+If your server already uses OpenTelemetry HTTP instrumentation, such as the OpenTelemetry Java agent, its spans join the trace on their own. The helper keeps the current span when it's already in the incoming trace, so using both is safe.
+
+What Statsig sends: workflow eval requests carry `Content-Type: application/json`, the headers you configured for the workflow, and two headers of their own. `traceparent` names the eval row's root span, and `x-statsig-eval-run` holds the eval run ID. A header you configure with the same name wins, matched case-insensitively. Test Connection doesn't send either header.
+
+Spans from your endpoint get your app's environment, so eval requests land with your production traces, where online evals can grade them. To keep them out, check for `x-statsig-eval-run` and run the handler inside `withStatsigEnvironment("eval", ...)`. You can use the same check to skip side effects.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withIncomingTraceContext;
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigEnvironment;
+
+@PostMapping("/agent")
+public AgentResponse agent(@RequestHeader HttpHeaders headers, @RequestBody AgentRequest body) {
+  return withIncomingTraceContext(
+      headers::getFirst,
+      () ->
+          headers.getFirst("x-statsig-eval-run") != null
+              ? withStatsigEnvironment("eval", () -> runAgent(body))
+              : runAgent(body));
+}
 ```
 
 ## Development
