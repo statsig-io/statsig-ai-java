@@ -34,9 +34,10 @@ public final class OpenAITelemetry {
 
     telemetry.setAttribute(StatsigTraceConventions.ATTR_GEN_AI_SPAN_TYPE, genAiType);
 
-    // Tag the model span and its statsig::gen_ai event with the active Statsig context and
-    // environment, so the call can be attributed and graded.
+    // Tag the model span and its statsig::gen_ai event with the active prompt version, Statsig
+    // context and environment, so the call can be attributed and graded.
     Context ctx = Context.current();
+    setAttributes(telemetry, StatsigContextUtils.getPromptSpanAttrs(ctx));
     setAttributes(telemetry, StatsigContextUtils.getStatsigSpanAttrs(ctx));
     setAttributes(telemetry, StatsigContextUtils.getEnvironmentSpanAttrs(ctx));
 

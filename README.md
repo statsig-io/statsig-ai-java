@@ -46,18 +46,6 @@ ai.logEvalGrade(
     new AIEvalGradeData("session-123"));
 ```
 
-### Prompt context helpers
-
-`Prompt.withLive(...)` and `Prompt.withContext(...)` automatically push prompt and user metadata into the OpenTelemetry context. Use them when calling downstream LLM clients so future instrumentation can enrich spans with prompt identifiers.
-
-```java
-prompt.withLive(live -> {
-  // Context.current() now includes statsig.llm.prompt_name/version and user identifiers
-  // call OpenAI, VertexAI, etc.
-  return null;
-});
-```
-
 ## Instrumentation (early preview)
 
 The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span.
@@ -70,6 +58,51 @@ import com.statsig.ai.instrumentation.openai.OpenAIWrapper;
 OpenAIClient rawClient = OpenAIOkHttpClient.fromEnv();
 OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
 ```
+
+### Tagging calls with a prompt version
+
+Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withVersion(version, ...)` for a Candidate. Model call spans from `OpenAIWrapper` inside it, and their `statsig::gen_ai` events, get `statsig.llm.prompt_name`, `statsig.llm.prompt_version` and `statsig.llm.prompt_version_id`, which Statsig uses to attribute online eval grades to a version. Both also put the prompt's user in context, like `withStatsigUserContext`.
+
+```java
+import com.openai.models.chat.completions.ChatCompletion;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.statsig.ai.PromptConfig;
+
+Prompt prompt = ai.getPrompt(user, "support_bot");
+PromptConfig live = prompt.getLivePrompt();
+
+// openai is a client from OpenAIWrapper.wrap.
+ChatCompletion completion =
+    prompt.withLive(
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(live.getModel())
+                        .addUserMessage(input)
+                        .build()));
+
+// Try a Candidate on the same input.
+PromptConfig candidate = prompt.getCandidatePrompts()[0];
+ChatCompletion candidateCompletion =
+    prompt.withVersion(
+        candidate,
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(candidate.getModel())
+                        .addUserMessage(input)
+                        .build()));
+```
+
+An inner `withVersion` replaces the outer version. `prompt.withContext(...)` sets only the prompt name and the user, for code that runs before a version is chosen, and keeps any version already in context.
+
+Template variables (`statsig.llm.prompt_template_variables`) aren't recorded yet, since the Java SDK doesn't render prompt templates.
 
 ## Tracing
 
@@ -100,7 +133,7 @@ ChatCompletion completion =
     withStatsigContext(user, "conversation-123", () -> openai.chat().completions().create(params));
 ```
 
-To tag every span with the user, not only model calls, run the code inside `withStatsigUserContext(user, ...)`. The span processor that `Otel.initialize` installs adds `statsig.user_id` and `statsig.custom_ids` to each span started inside it. `Prompt.withLive(...)` and `Prompt.withContext(...)` do the same for the prompt's user.
+To tag every span with the user, not only model calls, run the code inside `withStatsigUserContext(user, ...)`. The span processor that `Otel.initialize` installs adds `statsig.user_id` and `statsig.custom_ids` to each span started inside it. `Prompt.withLive(...)`, `Prompt.withVersion(...)` and `Prompt.withContext(...)` do the same for the prompt's user.
 
 ### Marking the environment
 
