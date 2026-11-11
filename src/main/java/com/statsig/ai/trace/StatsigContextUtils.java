@@ -89,8 +89,9 @@ public final class StatsigContextUtils {
   // ----------------------------------------------------------------------
 
   /**
-   * Returns {@code ctx} with a Statsig context holding the user's IDs and the activity ID. {@link
-   * #getStatsigSpanAttrs} turns it into span attributes.
+   * Returns {@code ctx} with a Statsig context holding the user's IDs and the activity ID. OpenAI
+   * model call spans started in it, and their {@code statsig::gen_ai} events, get the attributes
+   * from {@link #getStatsigSpanAttrs}.
    *
    * <p>Replaces any Statsig context already in {@code ctx}.
    *
@@ -163,8 +164,8 @@ public final class StatsigContextUtils {
   /**
    * Returns {@code ctx} with a Statsig environment. {@link StatsigSpanProcessor} tags spans started
    * in it with {@code statsig.environment}, which overrides the tracer's {@code
-   * deployment.environment.name} resource for those spans only. An inner environment replaces an
-   * outer one.
+   * deployment.environment.name} resource for those spans only. OpenAI model call spans also record
+   * it in their {@code statsig::gen_ai} events. An inner environment replaces an outer one.
    *
    * <p>Use {@code production} for live traffic. {@code eval} and {@code online_eval_judge} are
    * reserved for spans Statsig generates (eval runs and online eval judges).
