@@ -57,7 +57,7 @@ public class PromptContextTest {
   @Test
   public void withLiveSetsPromptAndUserContext() throws Exception {
     Prompt prompt = buildPrompt("prompt-user");
-    PromptConfig live = prompt.getLivePrompt();
+    PromptVersion live = prompt.getLive();
 
     prompt.withLive(
         () -> {
@@ -95,7 +95,7 @@ public class PromptContextTest {
 
   @Test
   public void withVersionTagsACandidate() throws Exception {
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
 
     String result =
@@ -117,7 +117,7 @@ public class PromptContextTest {
 
   @Test
   public void withVersionRunsARunnable() throws Exception {
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
     AtomicReference<Map<String, String>> attrs = new AtomicReference<Map<String, String>>();
 
@@ -132,7 +132,7 @@ public class PromptContextTest {
     ChatCompletionCreateParams params = mock(ChatCompletionCreateParams.class);
     ChatCompletion completion = mock(ChatCompletion.class);
     OpenAIClient client = mockOpenAIClient(params, completion);
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
 
     // These only compile if the expression lambda resolves to Supplier rather than Runnable.
@@ -146,9 +146,9 @@ public class PromptContextTest {
 
   @Test
   public void innerVersionReplacesTheOuterOne() throws Exception {
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     // A config name without a colon has no version ID.
-    PromptConfig noID = version("draft", "Draft");
+    PromptVersion noID = version("draft", "Draft");
     Prompt prompt = buildPrompt("prompt-user", candidate, noID);
 
     prompt.withLive(
@@ -204,10 +204,10 @@ public class PromptContextTest {
 
   @Test
   public void withContextKeepsTheOuterVersion() throws Exception {
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
     Prompt other =
-        new Prompt("other_prompt", prompt.getLivePrompt(), new PromptConfig[0], prompt.getUser());
+        new Prompt("other_prompt", prompt.getLive(), new PromptVersion[0], prompt.getUser());
 
     prompt.withVersion(
         candidate,
@@ -232,7 +232,7 @@ public class PromptContextTest {
     ChatCompletionCreateParams params = mock(ChatCompletionCreateParams.class);
     OpenAIClient wrapped = OpenAIWrapper.wrap(mockOpenAIClient(params, null));
 
-    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
     prompt.withVersion(candidate, () -> wrapped.chat().completions().create(params));
     wrapped.chat().completions().create(params);
@@ -275,9 +275,9 @@ public class PromptContextTest {
     return attrs;
   }
 
-  private static Prompt buildPrompt(String userId, PromptConfig... candidates) throws Exception {
+  private static Prompt buildPrompt(String userId, PromptVersion... candidates) throws Exception {
     JSONObject payload = JSON.parseObject(TestUtils.readResource("/prompt.json"));
-    PromptConfig config = new PromptConfig(toDynamicConfig(payload), true);
+    PromptVersion config = new PromptVersion(toDynamicConfig(payload), true);
     StatsigUser user =
         new StatsigUser.Builder()
             .setUserID(userId)
@@ -286,11 +286,11 @@ public class PromptContextTest {
     return new Prompt(config.getPromptName(), config, candidates, user);
   }
 
-  private static PromptConfig version(String configName, String versionName) throws Exception {
+  private static PromptVersion version(String configName, String versionName) throws Exception {
     Map<String, Object> value = new HashMap<String, Object>();
     value.put("name", versionName);
     value.put("aiConfigName", PROMPT_NAME);
-    return new PromptConfig(newDynamicConfig(configName, value, "userID"), false);
+    return new PromptVersion(newDynamicConfig(configName, value, "userID"), false);
   }
 
   private static DynamicConfig toDynamicConfig(JSONObject payload) throws Exception {

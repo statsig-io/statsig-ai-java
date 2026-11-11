@@ -32,7 +32,7 @@ StatsigAI ai =
 
 StatsigUser user = new StatsigUser.Builder().setUserID("whd").build();
 Prompt prompt = ai.getPrompt(user, "support_prompt");
-String systemMessage = prompt.getLivePrompt().getWorkflowBody().get("value").toString();
+String systemMessage = prompt.getLive().getWorkflowBody().get("value").toString();
 ```
 
 ### Logging evaluation grades
@@ -40,7 +40,7 @@ String systemMessage = prompt.getLivePrompt().getWorkflowBody().get("value").toS
 ```java
 ai.logEvalGrade(
     user,
-    prompt.getLivePrompt(),
+    prompt.getLive(),
     /* score */ 0.9,
     /* grader */ "auto_rater",
     new AIEvalGradeData("session-123"));
@@ -66,10 +66,10 @@ Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withV
 ```java
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
-import com.statsig.ai.PromptConfig;
+import com.statsig.ai.PromptVersion;
 
 Prompt prompt = ai.getPrompt(user, "support_bot");
-PromptConfig live = prompt.getLivePrompt();
+PromptVersion live = prompt.getLive();
 
 // openai is a client from OpenAIWrapper.wrap.
 ChatCompletion completion =
@@ -85,7 +85,7 @@ ChatCompletion completion =
                         .build()));
 
 // Try a Candidate on the same input.
-PromptConfig candidate = prompt.getCandidatePrompts()[0];
+PromptVersion candidate = prompt.getCandidates()[0];
 ChatCompletion candidateCompletion =
     prompt.withVersion(
         candidate,
