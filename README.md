@@ -76,6 +76,24 @@ OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
 OpenAIClientAsync wrappedAsync = OpenAIWrapper.wrap(OpenAIOkHttpClientAsync.fromEnv());
 ```
 
+### Gemini
+
+`GeminiWrapper.wrap` traces `models.generateContent(...)` and `generateContentStream(...)` calls from the [Google Gen AI Java SDK](https://github.com/googleapis/java-genai), with `gen_ai.provider.name` `gcp.gen_ai`. It takes the same `OpenAIWrapperConfig` as `OpenAIWrapper` (see "Capturing message content" below), so message content is captured only when you opt in. Thinking tokens count toward output tokens, and cached input tokens come from `cachedContentTokenCount`. A streaming call's span joins the chunks into one response.
+
+The Java `Client` and its `models` are final classes, so they can't be wrapped in place. `wrap` returns a `GeminiModels` with the same `generateContent` and `generateContentStream` methods: call those instead of `client.models`. `generateContentStream` returns a `GeminiResponseStream`, which you iterate and close like a `ResponseStream`. `async()` traces `client.async.models` the same way, and `getModels()` returns `client.models` for other calls.
+
+The Gen AI SDK isn't a dependency of this SDK, so add `com.google.genai:google-genai` to your app to use it.
+
+```java
+import com.google.genai.Client;
+import com.google.genai.types.GenerateContentResponse;
+import com.statsig.ai.instrumentation.gemini.GeminiModels;
+import com.statsig.ai.instrumentation.gemini.GeminiWrapper;
+
+GeminiModels gemini = GeminiWrapper.wrap(new Client());
+GenerateContentResponse response = gemini.generateContent("gemini-2.5-flash", input, null);
+```
+
 ### Capturing message content
 
 Messages usually hold user input and model output, so by default spans don't record them. To record them, pass an `OpenAIWrapperConfig` with `GenAICaptureOptions`:
