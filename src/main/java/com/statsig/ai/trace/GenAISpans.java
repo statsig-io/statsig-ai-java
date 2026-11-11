@@ -9,6 +9,7 @@ import io.opentelemetry.context.Scope;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
@@ -26,10 +27,11 @@ import java.util.function.Supplier;
  * environment and prompt version attributes from the context. It's marked OK when the body returns,
  * or ERROR with the exception recorded when it throws. The exception is re-thrown unchanged.
  *
- * <p>When the body returns a {@link CompletionStage}, such as a {@link
- * java.util.concurrent.CompletableFuture}, the span ends when the stage completes, and the same
- * stage is returned. The span ends in a callback on the stage, so a thread waiting on the stage can
- * resume just before the span ends.
+ * <p>When the body returns a {@link CompletionStage}, the span ends when the stage completes. For a
+ * {@link CompletableFuture}, the wrapper returns a future that completes with the same result or
+ * exception after the span has ended, like the chained promise in the Node SDK, so a caller can
+ * {@code join()} it and then flush. Other {@code CompletionStage} types are returned as they are,
+ * and a thread waiting on one can resume just before the span ends.
  *
  * <p>Model call spans from {@code OpenAIWrapper} are marked {@code statsig.span.llm_root=1} unless
  * they run inside a workflow span, which stands for the whole turn. {@link #startWorkflow(String,
@@ -235,16 +237,24 @@ public final class GenAISpans {
 
       T result = body.call();
       if (result instanceof CompletionStage) {
-        ((CompletionStage<?>) result)
-            .whenComplete(
-                (value, error) -> {
-                  if (error == null) {
-                    telemetry.setStatus(StatusCode.OK);
-                  } else {
-                    telemetry.fail(unwrap(error));
-                  }
-                  end(telemetry, spanCtx);
-                });
+        CompletionStage<?> chained =
+            ((CompletionStage<?>) result)
+                .whenComplete(
+                    (value, error) -> {
+                      if (error == null) {
+                        telemetry.setStatus(StatusCode.OK);
+                      } else {
+                        telemetry.fail(unwrap(error));
+                      }
+                      end(telemetry, spanCtx);
+                    });
+        // A plain CompletableFuture's chained future is a CompletableFuture too, so it can stand
+        // in for the body's result. It completes after the span ends.
+        if (result.getClass() == CompletableFuture.class) {
+          @SuppressWarnings("unchecked")
+          T chainedResult = (T) chained;
+          return chainedResult;
+        }
         return result;
       }
       telemetry.setStatus(StatusCode.OK);

@@ -7,6 +7,7 @@ import static com.statsig.ai.trace.GenAISpans.wrapCallable;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
@@ -48,6 +49,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -318,7 +320,8 @@ public class GenAISpansTest {
 
     CompletableFuture<String> returned = wrapped.get();
 
-    assertSame(pending, returned);
+    assertNotSame(pending, returned);
+    assertFalse(returned.isDone());
     assertTrue(exporter.getFinishedSpanItems().isEmpty());
     assertTrue(events.isEmpty());
 
@@ -329,6 +332,22 @@ public class GenAISpansTest {
     assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
     assertEquals("OK", onlyEvent().metadata.get("span.status_code"));
     assertEquals("async-result", returned.join());
+  }
+
+  @Test
+  public void returnedFutureCompletesAfterTheSpanEnds() {
+    CompletableFuture<String> pending = new CompletableFuture<String>();
+    CompletableFuture<String> returned =
+        wrap(WrapOptions.workflow("eval-record").build(), () -> pending).get();
+    AtomicBoolean spanEndedFirst = new AtomicBoolean(false);
+    // A caller waiting on the returned future, such as Eval() before it flushes spans, resumes
+    // only after the span has ended.
+    returned.thenRun(() -> spanEndedFirst.set(!exporter.getFinishedSpanItems().isEmpty()));
+
+    pending.complete("done");
+
+    assertTrue(spanEndedFirst.get());
+    assertEquals("done", returned.join());
   }
 
   @Test
