@@ -90,6 +90,24 @@ public class OpenAITelemetryTest {
     assertFalse(metadata.containsKey("statsig.environment"));
   }
 
+  @Test
+  public void modelSpanJoinsAnIncomingTrace() throws Throwable {
+    String traceID = "0af7651916cd43dd8448eb211c80319c";
+    String spanID = "b7ad6b7169203331";
+    Context ctx =
+        StatsigContextUtils.withIncomingTraceContext(
+            Context.current(),
+            Collections.singletonMap("traceparent", "00-" + traceID + "-" + spanID + "-01"));
+
+    try (Scope ignored = ctx.makeCurrent()) {
+      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    }
+
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals(traceID, span.getTraceId());
+    assertEquals(spanID, span.getParentSpanId());
+  }
+
   private static void resetOtelSingleton() throws Exception {
     Field instanceField = OtelSingleton.class.getDeclaredField("instance");
     instanceField.setAccessible(true);

@@ -1,12 +1,18 @@
 package com.statsig.ai.trace;
 
 import com.statsig.StatsigUser;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -205,6 +211,127 @@ public final class StatsigContextUtils {
       return Collections.emptyMap();
     }
     return Collections.singletonMap(StatsigTraceConventions.ATTR_ENVIRONMENT, environment);
+  }
+
+  // ----------------------------------------------------------------------
+  // Incoming trace context
+  // ----------------------------------------------------------------------
+
+  private static final String[] TRACE_HEADERS = {"traceparent", "tracestate"};
+
+  /**
+   * Returns {@code ctx} in the trace named by the request's W3C {@code traceparent} and {@code
+   * tracestate} headers, so spans started in it become children of the caller's span. Header names
+   * are matched case-insensitively; other headers are ignored.
+   *
+   * <p>Returns {@code ctx} unchanged when there's no valid {@code traceparent}, or when the span in
+   * {@code ctx} is already in that trace (for example, a span from OpenTelemetry HTTP server
+   * instrumentation).
+   *
+   * @param headers the request headers; null is treated as no headers
+   */
+  public static Context withIncomingTraceContext(Context ctx, Map<String, String> headers) {
+    if (headers == null) {
+      return ctx;
+    }
+    return withIncomingTraceContext(ctx, name -> getHeaderIgnoreCase(headers, name));
+  }
+
+  /**
+   * Like {@link #withIncomingTraceContext(Context, Map)}, reading each header with {@code
+   * getHeader}, for example a servlet request's {@code getHeader}. It's called with the names
+   * {@code traceparent} and {@code tracestate}, and returns null for a missing header.
+   *
+   * @param getHeader returns a request header's value; null is treated as no headers
+   */
+  public static Context withIncomingTraceContext(Context ctx, Function<String, String> getHeader) {
+    if (getHeader == null) {
+      return ctx;
+    }
+    Map<String, String> carrier = new HashMap<String, String>();
+    for (String name : TRACE_HEADERS) {
+      String value = getHeader.apply(name);
+      if (value != null) {
+        carrier.put(name, value);
+      }
+    }
+
+    SpanContext incoming =
+        Span.fromContext(
+                W3CTraceContextPropagator.getInstance()
+                    .extract(Context.root(), carrier, MapGetter.INSTANCE))
+            .getSpanContext();
+    if (!incoming.isValid()) {
+      return ctx;
+    }
+    // OpenTelemetry HTTP instrumentation may already have started a span in this trace.
+    if (Span.fromContext(ctx).getSpanContext().getTraceId().equals(incoming.getTraceId())) {
+      return ctx;
+    }
+    return ctx.with(Span.wrap(incoming));
+  }
+
+  /**
+   * Runs {@code body} in the trace named by the request's {@code traceparent} and {@code
+   * tracestate} headers, and returns its result. Without a valid {@code traceparent}, {@code body}
+   * runs unchanged. See {@link #withIncomingTraceContext(Context, Map)}.
+   */
+  public static <T> T withIncomingTraceContext(Map<String, String> headers, Supplier<T> body) {
+    Objects.requireNonNull(body, "body");
+    return callIn(withIncomingTraceContext(Context.current(), headers), body);
+  }
+
+  /**
+   * Runs {@code body} in the trace named by the request's {@code traceparent} and {@code
+   * tracestate} headers. Without a valid {@code traceparent}, {@code body} runs unchanged. See
+   * {@link #withIncomingTraceContext(Context, Map)}.
+   */
+  public static void withIncomingTraceContext(Map<String, String> headers, Runnable body) {
+    Objects.requireNonNull(body, "body");
+    runIn(withIncomingTraceContext(Context.current(), headers), body);
+  }
+
+  /**
+   * Runs {@code body} in the trace named by the {@code traceparent} and {@code tracestate} headers
+   * that {@code getHeader} returns, and returns its result. See {@link
+   * #withIncomingTraceContext(Context, Function)}.
+   */
+  public static <T> T withIncomingTraceContext(
+      Function<String, String> getHeader, Supplier<T> body) {
+    Objects.requireNonNull(body, "body");
+    return callIn(withIncomingTraceContext(Context.current(), getHeader), body);
+  }
+
+  /**
+   * Runs {@code body} in the trace named by the {@code traceparent} and {@code tracestate} headers
+   * that {@code getHeader} returns. See {@link #withIncomingTraceContext(Context, Function)}.
+   */
+  public static void withIncomingTraceContext(Function<String, String> getHeader, Runnable body) {
+    Objects.requireNonNull(body, "body");
+    runIn(withIncomingTraceContext(Context.current(), getHeader), body);
+  }
+
+  private static String getHeaderIgnoreCase(Map<String, String> headers, String name) {
+    for (Map.Entry<String, String> entry : headers.entrySet()) {
+      if (name.equalsIgnoreCase(entry.getKey())) {
+        return entry.getValue();
+      }
+    }
+    return null;
+  }
+
+  private enum MapGetter implements TextMapGetter<Map<String, String>> {
+    INSTANCE;
+
+    @Override
+    public Iterable<String> keys(Map<String, String> carrier) {
+      return carrier.keySet();
+    }
+
+    @Override
+    public String get(Map<String, String> carrier, String key) {
+      return carrier == null ? null : carrier.get(key);
+    }
   }
 
   // ----------------------------------------------------------------------
