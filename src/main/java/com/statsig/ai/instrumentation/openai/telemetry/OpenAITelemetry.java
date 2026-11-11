@@ -1,5 +1,6 @@
 package com.statsig.ai.instrumentation.openai.telemetry;
 
+import com.statsig.ai.trace.SpanTelemetry;
 import com.statsig.ai.trace.StatsigContextUtils;
 import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;

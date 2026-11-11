@@ -1,11 +1,8 @@
-package com.statsig.ai.instrumentation.openai.telemetry;
+package com.statsig.ai.trace;
 
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.StatsigAI;
-import com.statsig.ai.trace.StatsigContextItem;
-import com.statsig.ai.trace.StatsigContextUtils;
-import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.*;
