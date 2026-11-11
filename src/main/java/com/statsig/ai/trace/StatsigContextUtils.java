@@ -157,6 +157,56 @@ public final class StatsigContextUtils {
   }
 
   // ----------------------------------------------------------------------
+  // Environment
+  // ----------------------------------------------------------------------
+
+  /**
+   * Returns {@code ctx} with a Statsig environment. {@link StatsigSpanProcessor} tags spans started
+   * in it with {@code statsig.environment}, which overrides the tracer's {@code
+   * deployment.environment.name} resource for those spans only. An inner environment replaces an
+   * outer one.
+   *
+   * <p>Use {@code production} for live traffic. {@code eval} and {@code online_eval_judge} are
+   * reserved for spans Statsig generates (eval runs and online eval judges).
+   *
+   * @param environment the environment; an empty string adds no attribute
+   */
+  public static Context withStatsigEnvironment(Context ctx, String environment) {
+    return ctx.with(
+        StatsigTraceConventions.CTX_ACTIVE_ENVIRONMENT, environment == null ? "" : environment);
+  }
+
+  /**
+   * Runs {@code body} with a Statsig environment, and returns its result. See {@link
+   * #withStatsigEnvironment(Context, String)}.
+   */
+  public static <T> T withStatsigEnvironment(String environment, Supplier<T> body) {
+    Objects.requireNonNull(body, "body");
+    return callIn(withStatsigEnvironment(Context.current(), environment), body);
+  }
+
+  /**
+   * Runs {@code body} with a Statsig environment. See {@link #withStatsigEnvironment(Context,
+   * String)}.
+   */
+  public static void withStatsigEnvironment(String environment, Runnable body) {
+    Objects.requireNonNull(body, "body");
+    runIn(withStatsigEnvironment(Context.current(), environment), body);
+  }
+
+  /**
+   * Returns {@code statsig.environment} for the environment in {@code ctx}, or an empty map when
+   * there's no environment or it's empty.
+   */
+  public static Map<String, String> getEnvironmentSpanAttrs(Context ctx) {
+    String environment = ctx.get(StatsigTraceConventions.CTX_ACTIVE_ENVIRONMENT);
+    if (environment == null || environment.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    return Collections.singletonMap(StatsigTraceConventions.ATTR_ENVIRONMENT, environment);
+  }
+
+  // ----------------------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------------------
 

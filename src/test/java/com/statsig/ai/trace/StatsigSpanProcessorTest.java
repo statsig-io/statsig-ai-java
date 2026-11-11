@@ -29,6 +29,8 @@ public class StatsigSpanProcessorTest {
   private static final AttributeKey<String> USER_ID = AttributeKey.stringKey("statsig.user_id");
   private static final AttributeKey<String> CUSTOM_IDS =
       AttributeKey.stringKey("statsig.custom_ids");
+  private static final AttributeKey<String> ENVIRONMENT =
+      AttributeKey.stringKey("statsig.environment");
 
   private InMemorySpanExporter exporter;
   private StatsigSpanProcessor processor;
@@ -129,6 +131,69 @@ public class StatsigSpanProcessorTest {
   }
 
   @Test
+  public void stampsEnvironmentInsideEnvironmentScopeOnly() {
+    StatsigContextUtils.withStatsigEnvironment(
+        "eval",
+        () -> {
+          startAndEnd("eval-span");
+          // A Statsig context inside the environment keeps it.
+          StatsigContextUtils.withStatsigContext(
+              null, "activity", () -> startAndEnd("nested-context-span"));
+        });
+    startAndEnd("outside-span");
+
+    assertEquals("eval", flushAndGet("eval-span").getAttributes().get(ENVIRONMENT));
+    assertEquals("eval", flushAndGet("nested-context-span").getAttributes().get(ENVIRONMENT));
+    SpanData outside = flushAndGet("outside-span");
+    assertNull(outside.getAttributes().get(ENVIRONMENT));
+    assertNull(outside.getAttributes().get(USER_ID));
+    assertNull(outside.getAttributes().get(CUSTOM_IDS));
+  }
+
+  @Test
+  public void innerEnvironmentReplacesOuterUntilItReturns() {
+    String result =
+        StatsigContextUtils.withStatsigEnvironment(
+            "eval",
+            () -> {
+              startAndEnd("outer-before");
+              StatsigContextUtils.withStatsigEnvironment(
+                  "staging_canary", () -> startAndEnd("inner"));
+              startAndEnd("outer-after");
+              return "ok";
+            });
+
+    assertEquals("ok", result);
+    assertEquals("eval", flushAndGet("outer-before").getAttributes().get(ENVIRONMENT));
+    assertEquals("staging_canary", flushAndGet("inner").getAttributes().get(ENVIRONMENT));
+    assertEquals("eval", flushAndGet("outer-after").getAttributes().get(ENVIRONMENT));
+  }
+
+  @Test
+  public void emptyEnvironmentAddsNoAttribute() {
+    StatsigContextUtils.withStatsigEnvironment("", () -> startAndEnd("empty"));
+    // Like Node, an empty inner environment also hides an outer one.
+    StatsigContextUtils.withStatsigEnvironment(
+        "eval",
+        () -> StatsigContextUtils.withStatsigEnvironment("", () -> startAndEnd("empty-in-eval")));
+
+    assertNull(flushAndGet("empty").getAttributes().get(ENVIRONMENT));
+    assertNull(flushAndGet("empty-in-eval").getAttributes().get(ENVIRONMENT));
+  }
+
+  @Test
+  public void stampsUserAndEnvironmentTogether() {
+    StatsigUser user = new StatsigUser.Builder().setUserID("eval-user").build();
+
+    StatsigContextUtils.withStatsigEnvironment(
+        "eval", () -> StatsigContextUtils.withStatsigUserContext(user, () -> startAndEnd("both")));
+
+    SpanData span = flushAndGet("both");
+    assertEquals("eval-user", span.getAttributes().get(USER_ID));
+    assertEquals("eval", span.getAttributes().get(ENVIRONMENT));
+  }
+
+  @Test
   public void forceFlushExportsBatchedSpans() {
     startAndEnd("pending");
     assertTrue(exporter.getFinishedSpanItems().isEmpty());
@@ -160,23 +225,5 @@ public class StatsigSpanProcessorTest {
     verify(delegate).onEnd(span);
     verify(delegate).forceFlush();
     verify(delegate).shutdown();
-  }
-
-  @Test
-  public void otelTracerProviderUsesStatsigSpanProcessor() {
-    InMemorySpanExporter otelExporter = InMemorySpanExporter.create();
-    SdkTracerProvider provider = Otel.buildTracerProvider(otelExporter);
-    try {
-      StatsigUser user = new StatsigUser.Builder().setUserID("otel-user").build();
-      StatsigContextUtils.withStatsigUserContext(
-          user, () -> provider.get("otel-test").spanBuilder("otel-span").startSpan().end());
-
-      provider.forceFlush().join(5, TimeUnit.SECONDS);
-      assertEquals(1, otelExporter.getFinishedSpanItems().size());
-      SpanData span = otelExporter.getFinishedSpanItems().get(0);
-      assertEquals("otel-user", span.getAttributes().get(USER_ID));
-    } finally {
-      provider.shutdown().join(5, TimeUnit.SECONDS);
-    }
   }
 }

@@ -11,8 +11,9 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Stamps each span, when it starts, with the Statsig user from its parent context ({@code
- * statsig.user_id}, {@code statsig.custom_ids}), then hands it to a delegate processor for export.
+ * Stamps each span, when it starts, with the Statsig user ({@code statsig.user_id}, {@code
+ * statsig.custom_ids}) and environment ({@code statsig.environment}) from its parent context, then
+ * hands it to a delegate processor for export.
  */
 public final class StatsigSpanProcessor implements SpanProcessor {
   private final SpanProcessor delegate;
@@ -32,6 +33,7 @@ public final class StatsigSpanProcessor implements SpanProcessor {
   @Override
   public void onStart(Context parentContext, ReadWriteSpan span) {
     setAttributes(span, StatsigContextUtils.getUserSpanAttrs(parentContext));
+    setAttributes(span, StatsigContextUtils.getEnvironmentSpanAttrs(parentContext));
     delegate.onStart(parentContext, span);
   }
 
