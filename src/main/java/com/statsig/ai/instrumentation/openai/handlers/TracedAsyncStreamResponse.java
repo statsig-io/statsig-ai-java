@@ -2,32 +2,28 @@ package com.statsig.ai.instrumentation.openai.handlers;
 
 import com.openai.core.http.AsyncStreamResponse;
 import com.statsig.ai.instrumentation.GenAISpan;
+import com.statsig.ai.instrumentation.GenAIStreamTracker;
 import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
-import io.opentelemetry.api.trace.StatusCode;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
 /**
- * An async stream whose model call span records the time to the first chunk, and ends when the
- * stream completes (marked OK, with the response rebuilt from the chunks), fails (marked ERROR), or
- * is closed first. Without a subscriber, the span ends when {@link #onCompleteFuture()} completes.
+ * An async OpenAI stream tracked in its model call span. The span ends when the stream completes,
+ * fails or is closed, or, without a subscriber, when {@link #onCompleteFuture()} completes. See
+ * {@link GenAIStreamTracker}.
  */
 final class TracedAsyncStreamResponse<T> implements AsyncStreamResponse<T> {
   private final AsyncStreamResponse<T> delegate;
-  private final GenAISpan span;
-  private final GenAICaptureOptions capture;
-  private final List<T> chunks = new ArrayList<T>();
+  private final GenAIStreamTracker<T> tracker;
   private volatile boolean subscribed = false;
-  private boolean finished = false;
 
   TracedAsyncStreamResponse(
       AsyncStreamResponse<T> delegate, GenAISpan span, GenAICaptureOptions capture) {
     this.delegate = delegate;
-    this.span = span;
-    this.capture = capture;
+    this.tracker =
+        new GenAIStreamTracker<T>(
+            span, chunks -> TracedStreamResponse.streamAttributes(chunks, capture));
     CompletableFuture<Void> completion = delegate.onCompleteFuture();
     if (completion != null) {
       completion.whenComplete(
@@ -42,14 +38,14 @@ final class TracedAsyncStreamResponse<T> implements AsyncStreamResponse<T> {
   @Override
   public AsyncStreamResponse<T> subscribe(Handler<? super T> handler) {
     subscribed = true;
-    delegate.subscribe(traced(handler));
+    delegate.subscribe(tracked(handler));
     return this;
   }
 
   @Override
   public AsyncStreamResponse<T> subscribe(Handler<? super T> handler, Executor executor) {
     subscribed = true;
-    delegate.subscribe(traced(handler), executor);
+    delegate.subscribe(tracked(handler), executor);
     return this;
   }
 
@@ -61,17 +57,14 @@ final class TracedAsyncStreamResponse<T> implements AsyncStreamResponse<T> {
   @Override
   public void close() {
     delegate.close();
-    synchronized (this) {
-      finished = true;
-      span.end();
-    }
+    tracker.close();
   }
 
-  private Handler<T> traced(Handler<? super T> handler) {
+  private Handler<T> tracked(Handler<? super T> handler) {
     return new Handler<T>() {
       @Override
       public void onNext(T chunk) {
-        onChunk(chunk);
+        tracker.onChunk(chunk);
         handler.onNext(chunk);
       }
 
@@ -83,24 +76,11 @@ final class TracedAsyncStreamResponse<T> implements AsyncStreamResponse<T> {
     };
   }
 
-  private synchronized void onChunk(T chunk) {
-    if (chunks.isEmpty()) {
-      span.recordTimeToFirstToken();
-    }
-    chunks.add(chunk);
-  }
-
-  private synchronized void finish(Throwable error) {
-    if (finished) {
-      return;
-    }
-    finished = true;
+  private void finish(Throwable error) {
     if (error != null) {
-      span.fail(error);
+      tracker.fail(error);
     } else {
-      span.setAttributesSafely(() -> TracedStreamResponse.streamAttributes(chunks, capture));
-      span.getTelemetry().setStatus(StatusCode.OK);
+      tracker.complete();
     }
-    span.end();
   }
 }
