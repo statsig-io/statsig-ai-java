@@ -88,6 +88,50 @@ public class OpenAITelemetryTest {
     assertFalse(metadata.containsKey("statsig.user_id"));
     assertFalse(metadata.containsKey("statsig.custom_ids"));
     assertFalse(metadata.containsKey("statsig.environment"));
+    assertFalse(metadata.containsKey("statsig.llm.prompt_name"));
+    assertFalse(metadata.containsKey("statsig.llm.prompt_version"));
+    assertFalse(metadata.containsKey("statsig.llm.prompt_version_id"));
+  }
+
+  @Test
+  public void genAIEventMetadataCarriesThePromptVersion() throws Throwable {
+    Context ctx =
+        StatsigContextUtils.withPromptVersion(
+            Context.current(), "support_bot", "Candidate B", "candidate-b");
+
+    try (Scope ignored = ctx.makeCurrent()) {
+      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    }
+
+    assertEquals(1, events.size());
+    Map<String, String> metadata = events.get(0);
+    assertEquals("support_bot", metadata.get("statsig.llm.prompt_name"));
+    assertEquals("Candidate B", metadata.get("statsig.llm.prompt_version"));
+    assertEquals("candidate-b", metadata.get("statsig.llm.prompt_version_id"));
+
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals(
+        "support_bot", span.getAttributes().get(AttributeKey.stringKey("statsig.llm.prompt_name")));
+    assertEquals(
+        "Candidate B",
+        span.getAttributes().get(AttributeKey.stringKey("statsig.llm.prompt_version")));
+    assertEquals(
+        "candidate-b",
+        span.getAttributes().get(AttributeKey.stringKey("statsig.llm.prompt_version_id")));
+  }
+
+  @Test
+  public void genAIEventMetadataHasOnlyThePromptNameWithoutAVersion() throws Throwable {
+    Context ctx = StatsigContextUtils.withPrompt(Context.current(), "support_bot", null);
+
+    try (Scope ignored = ctx.makeCurrent()) {
+      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    }
+
+    Map<String, String> metadata = events.get(0);
+    assertEquals("support_bot", metadata.get("statsig.llm.prompt_name"));
+    assertFalse(metadata.containsKey("statsig.llm.prompt_version"));
+    assertFalse(metadata.containsKey("statsig.llm.prompt_version_id"));
   }
 
   @Test

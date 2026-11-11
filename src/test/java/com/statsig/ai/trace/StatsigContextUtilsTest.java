@@ -140,4 +140,54 @@ public class StatsigContextUtilsTest {
                 StatsigContextUtils.getStatsigSpanAttrs(Context.current())
                     .get("statsig.custom_ids")));
   }
+
+  @Test
+  public void noPromptHasNoPromptAttrs() {
+    assertTrue(StatsigContextUtils.getPromptSpanAttrs(Context.root()).isEmpty());
+  }
+
+  @Test
+  public void withPromptVersionAddsNameVersionAndID() {
+    Context ctx = StatsigContextUtils.withPromptVersion(Context.root(), "bot", "V1", "v1-id");
+
+    assertEquals(
+        attrs(
+            "statsig.llm.prompt_name",
+            "bot",
+            "statsig.llm.prompt_version",
+            "V1",
+            "statsig.llm.prompt_version_id",
+            "v1-id"),
+        StatsigContextUtils.getPromptSpanAttrs(ctx));
+  }
+
+  @Test
+  public void withPromptVersionReplacesTheOuterVersionAndSkipsEmptyValues() {
+    Context outer = StatsigContextUtils.withPromptVersion(Context.root(), "bot", "V1", "v1-id");
+    Context inner = StatsigContextUtils.withPromptVersion(outer, "bot", "V2", null);
+
+    assertEquals(
+        attrs("statsig.llm.prompt_name", "bot", "statsig.llm.prompt_version", "V2"),
+        StatsigContextUtils.getPromptSpanAttrs(inner));
+    assertTrue(
+        StatsigContextUtils.getPromptSpanAttrs(
+                StatsigContextUtils.withPromptVersion(Context.root(), "", null, ""))
+            .isEmpty());
+  }
+
+  @Test
+  public void withPromptOnlySetsTheValuesItIsGiven() {
+    Context outer = StatsigContextUtils.withPromptVersion(Context.root(), "bot", "V1", "v1-id");
+
+    assertEquals(
+        attrs(
+            "statsig.llm.prompt_name",
+            "other-bot",
+            "statsig.llm.prompt_version",
+            "V1",
+            "statsig.llm.prompt_version_id",
+            "v1-id"),
+        StatsigContextUtils.getPromptSpanAttrs(
+            StatsigContextUtils.withPrompt(outer, "other-bot", null)));
+  }
 }

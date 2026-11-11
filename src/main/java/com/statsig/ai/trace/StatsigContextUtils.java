@@ -25,6 +25,15 @@ import java.util.function.Supplier;
 public final class StatsigContextUtils {
   private StatsigContextUtils() {}
 
+  // ----------------------------------------------------------------------
+  // Prompt
+  // ----------------------------------------------------------------------
+
+  /**
+   * Returns {@code ctx} with the prompt name and version name, skipping a null or empty value.
+   * Unlike {@link #withPromptVersion}, it keeps any value in {@code ctx} that it doesn't set,
+   * including the version ID.
+   */
   public static Context withPrompt(Context ctx, String promptName, String promptVersion) {
     if (promptName != null && !promptName.isEmpty()) {
       ctx = ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT, promptName);
@@ -33,6 +42,56 @@ public final class StatsigContextUtils {
       ctx = ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION, promptVersion);
     }
     return ctx;
+  }
+
+  /**
+   * Returns {@code ctx} with the prompt name, version name and version ID. OpenAI model call spans
+   * started in it, and their {@code statsig::gen_ai} events, get the attributes from {@link
+   * #getPromptSpanAttrs}.
+   *
+   * <p>Replaces all three values already in {@code ctx}, so an inner version doesn't inherit an
+   * outer version's name or ID. A null or empty value adds no attribute.
+   */
+  public static Context withPromptVersion(
+      Context ctx, String promptName, String versionName, String versionID) {
+    return ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT, nullToEmpty(promptName))
+        .with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION, nullToEmpty(versionName))
+        .with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION_ID, nullToEmpty(versionID));
+  }
+
+  /**
+   * Returns the span attributes for the prompt in {@code ctx}: {@code statsig.llm.prompt_name},
+   * {@code statsig.llm.prompt_version} and {@code statsig.llm.prompt_version_id}, each only when
+   * it's set and not empty. Returns an empty map when none are.
+   */
+  public static Map<String, String> getPromptSpanAttrs(Context ctx) {
+    Map<String, String> attrs = new LinkedHashMap<String, String>();
+    putIfNotEmpty(
+        attrs,
+        StatsigTraceConventions.ATTR_LLM_PROMPT_NAME,
+        ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT));
+    putIfNotEmpty(
+        attrs,
+        StatsigTraceConventions.ATTR_LLM_PROMPT_VERSION,
+        ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION));
+    putIfNotEmpty(
+        attrs,
+        StatsigTraceConventions.ATTR_LLM_PROMPT_VERSION_ID,
+        ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION_ID));
+    if (attrs.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    return Collections.unmodifiableMap(attrs);
+  }
+
+  private static void putIfNotEmpty(Map<String, String> attrs, String key, String value) {
+    if (value != null && !value.isEmpty()) {
+      attrs.put(key, value);
+    }
+  }
+
+  private static String nullToEmpty(String value) {
+    return value == null ? "" : value;
   }
 
   // ----------------------------------------------------------------------
