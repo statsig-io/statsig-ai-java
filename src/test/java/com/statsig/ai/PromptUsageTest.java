@@ -50,12 +50,12 @@ public class PromptUsageTest {
     Prompt prompt = statsigAIInstance.getPrompt(user, "test_prompt");
 
     assertEquals("test_prompt", prompt.getName());
-    assertEquals("6KGzeo8TR9JTL7CZl7vccd", prompt.getLivePrompt().getId());
-    assertEquals("Version 1", prompt.getLivePrompt().getName());
-    assertEquals(2, prompt.getCandidatePrompts().length);
-    assertEquals("7jszgFEAi1KRA2Tot6qikg", prompt.getCandidatePrompts()[0].getId());
-    assertEquals("Version 2", prompt.getCandidatePrompts()[0].getName());
-    assertEquals("7CKLvQvOwjj2vjx12gFO0Z", prompt.getCandidatePrompts()[1].getId());
-    assertEquals("Version 3", prompt.getCandidatePrompts()[1].getName());
+    assertEquals("6KGzeo8TR9JTL7CZl7vccd", prompt.getLive().getId());
+    assertEquals("Version 1", prompt.getLive().getName());
+    assertEquals(2, prompt.getCandidates().length);
+    assertEquals("7jszgFEAi1KRA2Tot6qikg", prompt.getCandidates()[0].getId());
+    assertEquals("Version 2", prompt.getCandidates()[0].getName());
+    assertEquals("7CKLvQvOwjj2vjx12gFO0Z", prompt.getCandidates()[1].getId());
+    assertEquals("Version 3", prompt.getCandidates()[1].getName());
   }
 }

@@ -26,7 +26,7 @@ public class Otel {
     SdkTracerProvider tracerProvider = buildTracerProvider(exporter, options);
 
     // Save to singleton for global lookup
-    OtelSingleton.instantiate(tracerProvider);
+    OtelSingleton.instantiate(tracerProvider, options.getEnvironment());
 
     // Build OpenTelemetry and register global
     OpenTelemetry openTelemetry =

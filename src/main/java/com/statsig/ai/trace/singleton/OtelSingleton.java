@@ -5,19 +5,34 @@ import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 
 /**
- * Holds a global OtelSingleton instance that provides a TracerProvider. If not instantiated,
- * returns a no-op TracerProvider.
+ * Holds a global OtelSingleton instance that provides a TracerProvider and the tracer's
+ * environment. If not instantiated, returns a no-op TracerProvider.
  */
 public class OtelSingleton {
   private static volatile OtelSingleton instance;
   private final TracerProvider tracerProvider;
+  private final String environment;
 
   protected OtelSingleton(TracerProvider tracerProvider) {
-    this.tracerProvider = tracerProvider;
+    this(tracerProvider, null);
   }
 
-  /** Create or return existing OtelSingleton instance. */
+  protected OtelSingleton(TracerProvider tracerProvider, String environment) {
+    this.tracerProvider = tracerProvider;
+    this.environment = environment;
+  }
+
+  /** Create or return existing OtelSingleton instance, with no environment. */
   public static OtelSingleton instantiate(TracerProvider tracerProvider) {
+    return instantiate(tracerProvider, null);
+  }
+
+  /**
+   * Create or return existing OtelSingleton instance.
+   *
+   * @param environment the environment from {@code InitializeTracingOptions}, or null for none
+   */
+  public static OtelSingleton instantiate(TracerProvider tracerProvider, String environment) {
     if (instance != null) {
       System.out.println(
           "[Statsig OtelSingleton] OtelSingleton instance already exists. Returning the existing instance.");
@@ -25,7 +40,7 @@ public class OtelSingleton {
     }
     synchronized (OtelSingleton.class) {
       if (instance == null) {
-        instance = new OtelSingleton(tracerProvider);
+        instance = new OtelSingleton(tracerProvider, environment);
       }
     }
     return instance;
@@ -45,6 +60,21 @@ public class OtelSingleton {
 
   public static TracerProvider getTracerProviderStatic() {
     return getInstance().getTracerProvider();
+  }
+
+  /** Returns the environment the tracer was initialized with, or null when there's none. */
+  public String getEnvironment() {
+    return environment;
+  }
+
+  /**
+   * Returns the environment the tracer was initialized with, or null when there's none or tracing
+   * isn't initialized.
+   */
+  public static String getEnvironmentStatic() {
+    // Read the field directly so an uninitialized singleton doesn't log the no-op warning.
+    OtelSingleton current = instance;
+    return current == null ? null : current.environment;
   }
 
   /**

@@ -2,6 +2,7 @@ package com.statsig.ai.instrumentation.openai.telemetry;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import com.statsig.StatsigUser;
 import com.statsig.ai.trace.StatsigContextUtils;
@@ -16,6 +17,7 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +29,7 @@ public class OpenAITelemetryTest {
   private InMemorySpanExporter spanExporter;
   private SdkTracerProvider tracerProvider;
   private List<Map<String, String>> events;
+  private List<StatsigUser> eventUsers;
   private OpenAITelemetry telemetry;
 
   @Before
@@ -40,7 +43,8 @@ public class OpenAITelemetryTest {
     OtelSingleton.instantiate(tracerProvider);
 
     events = new ArrayList<Map<String, String>>();
-    telemetry = new OpenAITelemetry((name, metadata) -> events.add(metadata));
+    eventUsers = new ArrayList<StatsigUser>();
+    telemetry = newTelemetry();
   }
 
   @After
@@ -151,6 +155,57 @@ public class OpenAITelemetryTest {
     SpanData span = spanExporter.getFinishedSpanItems().get(0);
     assertEquals(traceID, span.getTraceId());
     assertEquals(spanID, span.getParentSpanId());
+  }
+
+  @Test
+  public void genAIEventUserHasNoCustomIDsWithoutEnvironmentOrActivityID() throws Throwable {
+    // A Statsig context without an activity ID adds none.
+    StatsigContextUtils.withStatsigContext(
+        new StatsigUser.Builder().setUserID("someone").build(),
+        null,
+        () -> traceOrFail("openai.chat.completions"));
+
+    assertEquals(1, eventUsers.size());
+    StatsigUser user = eventUsers.get(0);
+    assertEquals("statsig-ai-openai-wrapper", user.getUserID());
+    assertTrue(user.getCustomIDs() == null || user.getCustomIDs().isEmpty());
+  }
+
+  @Test
+  public void genAIEventUserCarriesTheTracerEnvironmentAndActivityID() throws Throwable {
+    resetOtelSingleton();
+    OtelSingleton.instantiate(tracerProvider, "staging");
+    telemetry = newTelemetry();
+
+    StatsigContextUtils.withStatsigContext(
+        null, "activity-1", () -> traceOrFail("openai.chat.completions"));
+    traceOrFail("openai.chat.completions");
+
+    assertEquals(2, eventUsers.size());
+    Map<String, String> both = new HashMap<String, String>();
+    both.put("environment", "staging");
+    both.put("statsig.activity_id", "activity-1");
+    assertEquals("statsig-ai-openai-wrapper", eventUsers.get(0).getUserID());
+    assertEquals(both, eventUsers.get(0).getCustomIDs());
+    // Outside the Statsig context, only the environment.
+    assertEquals(
+        Collections.singletonMap("environment", "staging"), eventUsers.get(1).getCustomIDs());
+  }
+
+  private OpenAITelemetry newTelemetry() {
+    return new OpenAITelemetry(
+        (user, name, metadata) -> {
+          eventUsers.add(user);
+          events.add(metadata);
+        });
+  }
+
+  private void traceOrFail(String name) {
+    try {
+      telemetry.trace(name, "chat", span -> "ok");
+    } catch (Throwable t) {
+      throw new AssertionError(t);
+    }
   }
 
   private static void resetOtelSingleton() throws Exception {

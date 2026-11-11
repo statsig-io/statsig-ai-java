@@ -13,23 +13,25 @@ import java.util.function.Supplier;
 
 public class Prompt {
   public final String name;
-  public PromptConfig live;
-  public PromptConfig[] candidates;
-  public StatsigUser user;
+  private final PromptVersion live;
+  private final PromptVersion[] candidates;
+  private final StatsigUser user;
 
-  Prompt(String name, PromptConfig livePrompt, PromptConfig[] candidatePrompts, StatsigUser user) {
+  Prompt(String name, PromptVersion live, PromptVersion[] candidates, StatsigUser user) {
     this.name = name;
-    this.live = livePrompt;
-    this.candidates = candidatePrompts;
+    this.live = live;
+    this.candidates = candidates;
     this.user = user;
   }
 
-  public PromptConfig getLivePrompt() {
+  /** Returns the live version served to the user. */
+  public PromptVersion getLive() {
     return this.live;
   }
 
-  public PromptConfig[] getCandidatePrompts() {
-    return this.candidates;
+  /** Returns a copy of the candidate versions. */
+  public PromptVersion[] getCandidates() {
+    return this.candidates.clone();
   }
 
   public StatsigUser getUser() {
@@ -42,7 +44,7 @@ public class Prompt {
 
   /**
    * Runs {@code body} with the live version active, and returns its result. Get the live version
-   * from {@link #getLivePrompt()}. See {@link #withVersion(PromptConfig, Supplier)}.
+   * from {@link #getLive()}. See {@link #withVersion(PromptVersion, Supplier)}.
    */
   public <R> R withLive(Supplier<R> body) {
     Objects.requireNonNull(body, "body");
@@ -67,10 +69,10 @@ public class Prompt {
    * version. It also puts this prompt's user in context, like {@link
    * StatsigContextUtils#withStatsigUserContext(StatsigUser, Supplier)}.
    *
-   * <p>Use it with a candidate from {@link #getCandidatePrompts()}. An inner version replaces an
-   * outer one.
+   * <p>Use it with a candidate from {@link #getCandidates()}. An inner version replaces an outer
+   * one.
    */
-  public <R> R withVersion(PromptConfig version, Supplier<R> body) {
+  public <R> R withVersion(PromptVersion version, Supplier<R> body) {
     Objects.requireNonNull(version, "version");
     Objects.requireNonNull(body, "body");
     Context ctx =
@@ -83,10 +85,10 @@ public class Prompt {
   }
 
   /**
-   * Runs {@code body} with {@code version} active. See {@link #withVersion(PromptConfig,
+   * Runs {@code body} with {@code version} active. See {@link #withVersion(PromptVersion,
    * Supplier)}.
    */
-  public void withVersion(PromptConfig version, Runnable body) {
+  public void withVersion(PromptVersion version, Runnable body) {
     Objects.requireNonNull(body, "body");
     withVersion(
         version,
@@ -100,7 +102,7 @@ public class Prompt {
    * Runs {@code supplier} with this prompt's name and user in context, and returns its result, for
    * code that runs before a version is chosen. Spans started inside it get {@code
    * statsig.llm.prompt_name}. It keeps any version already in context, so inside {@link
-   * #withVersion(PromptConfig, Supplier)} they also get that version.
+   * #withVersion(PromptVersion, Supplier)} they also get that version.
    */
   public <R> R withContext(Supplier<R> supplier) {
     Objects.requireNonNull(supplier, "supplier");
@@ -139,16 +141,16 @@ public class Prompt {
     for (int i = 0; i < candidatePromptIdsRaw.length; i++) {
       candidatePromptIds[i] = String.valueOf(candidatePromptIdsRaw[i]);
     }
-    DynamicConfig livePromptConfig = statsigServer.getDynamicConfig(user, livePromptId);
-    PromptConfig livePromptVariant = new PromptConfig(livePromptConfig, true);
+    DynamicConfig liveDynamicConfig = statsigServer.getDynamicConfig(user, livePromptId);
+    PromptVersion liveVersion = new PromptVersion(liveDynamicConfig, true);
 
-    PromptConfig[] candidatePromptConfigs = new PromptConfig[candidatePromptIds.length];
+    PromptVersion[] candidateVersions = new PromptVersion[candidatePromptIds.length];
     for (int i = 0; i < candidatePromptIds.length; i++) {
-      DynamicConfig candidatePromptConfig =
+      DynamicConfig candidateDynamicConfig =
           statsigServer.getDynamicConfig(user, candidatePromptIds[i]);
-      candidatePromptConfigs[i] = new PromptConfig(candidatePromptConfig, false);
+      candidateVersions[i] = new PromptVersion(candidateDynamicConfig, false);
     }
 
-    return new Prompt(promptName, livePromptVariant, candidatePromptConfigs, user);
+    return new Prompt(promptName, liveVersion, candidateVersions, user);
   }
 }

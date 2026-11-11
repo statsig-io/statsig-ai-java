@@ -3,7 +3,7 @@ package com.statsig.ai;
 import com.statsig.DynamicConfig;
 import java.util.Map;
 
-public class PromptConfig {
+public class PromptVersion {
   private final String name;
   private final double temperature;
   private final int maxTokens;
@@ -19,7 +19,7 @@ public class PromptConfig {
   private final String id;
   private final boolean isLiveForUser;
 
-  public PromptConfig(DynamicConfig promtDefinition) {
+  public PromptVersion(DynamicConfig promtDefinition) {
     this(promtDefinition, false);
   }
 
@@ -27,7 +27,7 @@ public class PromptConfig {
    * @param isLiveForUser {@code true} when this is the live version served to the user, {@code
    *     false} for a candidate.
    */
-  public PromptConfig(DynamicConfig promtDefinition, boolean isLiveForUser) {
+  public PromptVersion(DynamicConfig promtDefinition, boolean isLiveForUser) {
     this.name = promtDefinition.getString("name", "");
     this.temperature = promtDefinition.getDouble("temperature", Double.NaN);
     this.maxTokens = promtDefinition.getInt("maxTokens", Integer.MIN_VALUE);

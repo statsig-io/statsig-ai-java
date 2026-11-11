@@ -153,7 +153,7 @@ public final class StatsigAI {
    */
   public void logEvalGrade(
       StatsigUser user,
-      PromptConfig promptVersion,
+      PromptVersion promptVersion,
       double score,
       String graderName,
       AIEvalGradeData evalGradeData) {

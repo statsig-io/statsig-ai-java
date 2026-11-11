@@ -3,8 +3,13 @@ package com.statsig.ai.instrumentation.openai.telemetry;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.StatsigAI;
+import com.statsig.ai.trace.StatsigContextItem;
+import com.statsig.ai.trace.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigTraceConventions;
+import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.*;
+import io.opentelemetry.context.Context;
 import java.lang.reflect.Array;
 import java.util.*;
 
@@ -16,11 +21,18 @@ public final class SpanTelemetry {
 
   public static final int DEFAULT_MAX_JSON_CHARS = 4096;
 
+  /** The user ID {@code statsig::gen_ai} events are logged with. */
+  public static final String GEN_AI_EVENT_USER_ID = "statsig-ai-openai-wrapper";
+
+  private static final String EVENT_USER_CUSTOM_ID_ENVIRONMENT = "environment";
+
   private final Span span;
   private final String spanName;
   private final int maxJsonChars;
   private final long startNano = System.nanoTime();
   private final SpanEventLogger eventLogger;
+  // The tracer's environment, from Otel.initialize, when the span starts.
+  private final String environment = OtelSingleton.getEnvironmentStatic();
 
   private final Map<String, String> metadata = new HashMap<String, String>();
   private boolean ended = false;
@@ -173,7 +185,31 @@ public final class SpanTelemetry {
 
     span.end();
 
-    eventLogger.log(spanName, Collections.unmodifiableMap(new HashMap<String, String>(metadata)));
+    eventLogger.log(
+        eventUser(environment, Context.current()),
+        spanName,
+        Collections.unmodifiableMap(new HashMap<String, String>(metadata)));
+  }
+
+  /**
+   * The user a {@code statsig::gen_ai} event is logged with: {@link #GEN_AI_EVENT_USER_ID}, with
+   * custom IDs {@code environment} (the tracer's environment) and {@code statsig.activity_id} (from
+   * the Statsig context in {@code ctx}), each only when it's set.
+   */
+  static StatsigUser eventUser(String environment, Context ctx) {
+    Map<String, String> customIDs = new LinkedHashMap<String, String>();
+    if (environment != null && !environment.isEmpty()) {
+      customIDs.put(EVENT_USER_CUSTOM_ID_ENVIRONMENT, environment);
+    }
+    StatsigContextItem statsigContext = StatsigContextUtils.getActiveStatsigContext(ctx);
+    if (statsigContext != null && statsigContext.getActivityID() != null) {
+      customIDs.put(StatsigTraceConventions.ATTR_ACTIVITY_ID, statsigContext.getActivityID());
+    }
+    StatsigUser.Builder user = new StatsigUser.Builder().setUserID(GEN_AI_EVENT_USER_ID);
+    if (!customIDs.isEmpty()) {
+      user.setCustomIDs(customIDs);
+    }
+    return user.build();
   }
 
   // ----------------------------------------------------------------------
@@ -193,11 +229,19 @@ public final class SpanTelemetry {
   // ----------------------------------------------------------------------
 
   public interface SpanEventLogger {
-    void log(String name, Map<String, String> metadata);
+    /**
+     * Logs a span's {@code statsig::gen_ai} event.
+     *
+     * @param user the event user: {@code statsig-ai-openai-wrapper}, with the tracer's environment
+     *     and the activity ID as custom IDs when they're set
+     * @param name the span name
+     * @param metadata the span's attributes and status
+     */
+    void log(StatsigUser user, String name, Map<String, String> metadata);
 
     static SpanEventLogger noop() {
       return new SpanEventLogger() {
-        public void log(String n, Map<String, String> m) {}
+        public void log(StatsigUser u, String n, Map<String, String> m) {}
       };
     }
   }
@@ -210,18 +254,16 @@ public final class SpanTelemetry {
     static final StatsigEventLogger INSTANCE = new StatsigEventLogger();
 
     private static final String EVENT_NAME = "statsig::gen_ai";
-    private static final StatsigUser DEFAULT_USER =
-        new StatsigUser.Builder().setUserID("statsig-ai-wrapper").build();
 
     private volatile boolean warned = false;
 
-    public void log(String spanName, Map<String, String> metadata) {
+    public void log(StatsigUser user, String spanName, Map<String, String> metadata) {
       Statsig statsig = getStatsig();
       if (statsig == null) {
         warnOnce();
         return;
       }
-      statsig.logEvent(DEFAULT_USER, EVENT_NAME, spanName, metadata);
+      statsig.logEvent(user, EVENT_NAME, spanName, metadata);
     }
 
     private Statsig getStatsig() {
