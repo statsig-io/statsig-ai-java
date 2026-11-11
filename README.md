@@ -108,6 +108,20 @@ OpenAIClient wrapped =
 
 `setCustomAttributes` adds your own attributes to every model call span; the wrapper's attributes win when a key is the same. JSON attributes, such as the messages, are truncated after `setMaxJsonChars` characters (40,000 by default), and `<key>_len` records each one's full length.
 
+### Anthropic
+
+`AnthropicWrapper.wrap` records `messages().create(...)` and `createStreaming(...)` calls from the [Anthropic Java SDK](https://github.com/anthropics/anthropic-sdk-java) the same way, with `gen_ai.provider.name` `anthropic`, on the blocking and the async client. It takes the same `OpenAIWrapperConfig`, so message content is captured only when you opt in. Cache reads and writes count toward input tokens, and cache reads are also recorded as `statsig.gen_ai.usage.input_cached_tokens`. A streaming call's span rebuilds the final message from the stream's events.
+
+The Anthropic SDK isn't a dependency of this SDK, so add `com.anthropic:anthropic-java` to your app to use it.
+
+```java
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.statsig.ai.instrumentation.anthropic.AnthropicWrapper;
+
+AnthropicClient anthropic = AnthropicWrapper.wrap(AnthropicOkHttpClient.fromEnv());
+```
+
 ### Tagging calls with a prompt version
 
 Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withVersion(version, ...)` for a Candidate. Model call spans from `OpenAIWrapper` inside it, and their `statsig::gen_ai` events, get `statsig.llm.prompt_name`, `statsig.llm.prompt_version` and `statsig.llm.prompt_version_id`, which Statsig uses to attribute online eval grades to a version. Both also put the prompt's user in context, like `withStatsigUserContext`.
