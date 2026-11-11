@@ -46,6 +46,14 @@ public class OtelSingleton {
     return instance;
   }
 
+  /**
+   * Returns true once an instance has been stored, for example by {@code Otel.initialize}. Until
+   * then spans go to the no-op fallback and aren't exported.
+   */
+  public static boolean isInitialized() {
+    return instance != null;
+  }
+
   /** Return current instance or fallback Noop version. */
   public static OtelSingleton getInstance() {
     if (instance != null) {
