@@ -1,11 +1,8 @@
-package com.statsig.ai.instrumentation.openai.telemetry;
+package com.statsig.ai.trace;
 
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.StatsigAI;
-import com.statsig.ai.trace.StatsigContextItem;
-import com.statsig.ai.trace.StatsigContextUtils;
-import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.*;
@@ -15,7 +12,8 @@ import java.util.*;
 
 /**
  * Wraps an OTEL Span with attribute helpers, JSON truncation, exception handling, metadata
- * aggregation, and Statsig event logging.
+ * aggregation, and Statsig event logging. OpenAI model call spans and {@link GenAISpans} spans each
+ * log one {@code statsig::gen_ai} event through it when they end.
  */
 public final class SpanTelemetry {
 
@@ -179,14 +177,27 @@ public final class SpanTelemetry {
   // End
   // ----------------------------------------------------------------------
 
+  /**
+   * Ends the span and logs its {@code statsig::gen_ai} event, with the activity ID from the current
+   * context. Does nothing when the span has already ended.
+   */
   public void end() {
+    end(Context.current());
+  }
+
+  /**
+   * Ends the span and logs its {@code statsig::gen_ai} event, with the activity ID from the Statsig
+   * context in {@code ctx}, for spans that end on another thread. Does nothing when the span has
+   * already ended.
+   */
+  public void end(Context ctx) {
     if (ended) return;
     ended = true;
 
     span.end();
 
     eventLogger.log(
-        eventUser(environment, Context.current()),
+        eventUser(environment, ctx),
         spanName,
         Collections.unmodifiableMap(new HashMap<String, String>(metadata)));
   }

@@ -2,10 +2,12 @@ package com.statsig.ai.instrumentation.openai.telemetry;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.statsig.StatsigUser;
 import com.statsig.ai.trace.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.context.Context;
@@ -21,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -190,6 +193,64 @@ public class OpenAITelemetryTest {
     // Outside the Statsig context, only the environment.
     assertEquals(
         Collections.singletonMap("environment", "staging"), eventUsers.get(1).getCustomIDs());
+  }
+
+  @Test
+  public void modelCallOutsideAnotherRootIsTheLLMRoot() throws Throwable {
+    telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    // An empty root counts as none.
+    try (Scope ignored =
+        Context.current().with(StatsigTraceConventions.CTX_GEN_AI_ROOT, "").makeCurrent()) {
+      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    }
+
+    List<SpanData> spans = spanExporter.getFinishedSpanItems();
+    assertEquals(2, spans.size());
+    for (SpanData span : spans) {
+      assertEquals("1", span.getAttributes().get(AttributeKey.stringKey("statsig.span.llm_root")));
+    }
+    assertEquals("1", events.get(0).get("statsig.span.llm_root"));
+    assertEquals("1", events.get(1).get("statsig.span.llm_root"));
+  }
+
+  @Test
+  public void modelCallInsideAnotherRootIsNotTheLLMRoot() throws Throwable {
+    try (Scope ignored =
+        Context.current()
+            .with(StatsigTraceConventions.CTX_GEN_AI_ROOT, "invoke_workflow")
+            .makeCurrent()) {
+      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    }
+
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertNull(span.getAttributes().get(AttributeKey.stringKey("statsig.span.llm_root")));
+    assertFalse(events.get(0).containsKey("statsig.span.llm_root"));
+  }
+
+  @Test
+  public void modelCallIsTheLLMRootForModelCallsInsideIt() throws Throwable {
+    AtomicReference<String> rootInside = new AtomicReference<String>();
+
+    telemetry.trace(
+        "outer",
+        "chat",
+        outer -> {
+          rootInside.set(Context.current().get(StatsigTraceConventions.CTX_GEN_AI_ROOT));
+          return telemetry.trace("inner", "chat", inner -> "ok");
+        });
+
+    assertEquals("outer", rootInside.get());
+    // The context outside the call is unchanged.
+    assertNull(Context.current().get(StatsigTraceConventions.CTX_GEN_AI_ROOT));
+
+    Map<String, SpanData> spans = new HashMap<String, SpanData>();
+    for (SpanData span : spanExporter.getFinishedSpanItems()) {
+      spans.put(span.getName(), span);
+    }
+    AttributeKey<String> llmRoot = AttributeKey.stringKey("statsig.span.llm_root");
+    assertEquals("1", spans.get("outer").getAttributes().get(llmRoot));
+    assertNull(spans.get("inner").getAttributes().get(llmRoot));
+    assertEquals(spans.get("outer").getSpanId(), spans.get("inner").getParentSpanId());
   }
 
   private OpenAITelemetry newTelemetry() {

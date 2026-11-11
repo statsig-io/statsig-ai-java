@@ -147,9 +147,57 @@ import static com.statsig.ai.trace.StatsigContextUtils.withStatsigEnvironment;
 withStatsigEnvironment("staging_canary", () -> handleRequest(request));
 ```
 
+### Workflow and tool spans
+
+`GenAISpans.wrap` records a span each time the wrapped code runs, so the model calls it makes appear as its children in the trace. Use an `invoke_workflow` span for an agent turn and an `execute_tool` span for each tool call. Build the options with `WrapOptions.workflow(name)` or `WrapOptions.tool(name)`. `setUser` and `setActivityID` run the span in a Statsig context, like `withStatsigContext`, and `setAttribute` adds your own attributes.
+
+```java
+import static com.statsig.ai.trace.GenAISpans.wrap;
+
+import com.statsig.ai.trace.options.WrapOptions;
+import java.util.List;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+Function<String, List<Doc>> searchDocs =
+    wrap(
+        WrapOptions.tool("search_docs").setToolType("retrieval").build(),
+        (String query) -> docIndex.search(query));
+
+Supplier<ChatCompletion> supportTurn =
+    wrap(
+        WrapOptions.workflow("support_turn").setUser(user).setActivityID(conversationID).build(),
+        () -> {
+          List<Doc> docs = searchDocs.apply(input);
+          return openai.chat().completions().create(buildParams(docs, input));
+        });
+
+ChatCompletion completion = prompt.withLive(supportTurn);
+```
+
+`wrap` takes a `Supplier`, `Function` or `Runnable` and returns the same type. `wrapCallable` takes a `Callable` and re-throws its checked exceptions unchanged. Each call records one span with `statsig.span.type=gen_ai`, `statsig.span.gen_ai.type` (`workflow` or `tool`), the name as `statsig.gen_ai.workflow.name` or `statsig.gen_ai.tool.name`, and the tool type as `gen_ai.tool.type`. Like model call spans, it gets the user, environment and prompt version from the context, and logs a `statsig::gen_ai` event. A span whose code throws is marked ERROR, and the exception is re-thrown. When the code returns a `CompletableFuture`, the span ends when the future completes, and `wrap` returns a future that completes with the same result after the span has ended, so you can `join()` it and then flush. Other `CompletionStage` types are returned as they are.
+
+`startWorkflow` runs its body right away in a workflow span, and returns the result. `startWorkflowCallable` does the same for a `Callable`.
+
+```java
+import static com.statsig.ai.trace.GenAISpans.startWorkflow;
+
+String answer = startWorkflow("support_turn", () -> runAgent(input));
+
+startWorkflow(
+    WrapOptions.workflow("nightly_digest").setUser(user).setAttribute("digest.size", 20).build(),
+    () -> sendDigest(user));
+```
+
+`statsig.span.llm_root=1` marks the span that stands for a whole LLM interaction:
+
+- A model call from `OpenAIWrapper` is the root when there's no workflow around it, including inside a tool span on its own.
+- A model call inside a workflow span from `wrap` isn't, since the workflow stands for the whole turn. The `wrap` workflow span isn't marked either.
+- `startWorkflow` marks its own span as the root, and the model calls inside it aren't.
+
 ### Joining a Statsig eval trace
 
-A workflow eval sends each dataset row to your endpoint as a POST request. To show your agent's model calls under the eval row in the trace drawer, run the handler inside `withIncomingTraceContext`. It reads the W3C `traceparent` and `tracestate` request headers, so spans started inside it become children of the eval row's span. Pass the headers as a `Map<String, String>` (names are matched case-insensitively) or as a header getter such as a servlet request's `getHeader`. If there's no valid `traceparent`, the handler runs as usual.
+A workflow eval sends each dataset row to your endpoint as a POST request. To show your agent's tool and model calls under the eval row in the trace drawer, run the handler inside `withIncomingTraceContext`. It reads the W3C `traceparent` and `tracestate` request headers, so spans started inside it become children of the eval row's span. Pass the headers as a `Map<String, String>` (names are matched case-insensitively) or as a header getter such as a servlet request's `getHeader`. If there's no valid `traceparent`, the handler runs as usual.
 
 ```java
 import static com.statsig.ai.trace.StatsigContextUtils.withIncomingTraceContext;

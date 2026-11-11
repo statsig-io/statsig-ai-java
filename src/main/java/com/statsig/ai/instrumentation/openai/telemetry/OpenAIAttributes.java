@@ -1,5 +1,6 @@
 package com.statsig.ai.instrumentation.openai.telemetry;
 
+import com.statsig.ai.trace.SpanTelemetry;
 import java.lang.reflect.Method;
 import java.util.*;
 
