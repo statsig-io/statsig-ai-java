@@ -89,13 +89,13 @@ public class Prompt {
       candidatePromptIds[i] = String.valueOf(candidatePromptIdsRaw[i]);
     }
     DynamicConfig livePromptConfig = statsigServer.getDynamicConfig(user, livePromptId);
-    PromptConfig livePromptVariant = new PromptConfig(livePromptConfig);
+    PromptConfig livePromptVariant = new PromptConfig(livePromptConfig, true);
 
     PromptConfig[] candidatePromptConfigs = new PromptConfig[candidatePromptIds.length];
     for (int i = 0; i < candidatePromptIds.length; i++) {
       DynamicConfig candidatePromptConfig =
           statsigServer.getDynamicConfig(user, candidatePromptIds[i]);
-      candidatePromptConfigs[i] = new PromptConfig(candidatePromptConfig);
+      candidatePromptConfigs[i] = new PromptConfig(candidatePromptConfig, false);
     }
 
     return new Prompt(promptName, livePromptVariant, candidatePromptConfigs, user);

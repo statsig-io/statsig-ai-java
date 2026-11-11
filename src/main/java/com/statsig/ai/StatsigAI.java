@@ -4,6 +4,11 @@ import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.internal.Utils;
+import com.statsig.ai.trace.StatsigTraceConventions;
+import com.statsig.ai.trace.singleton.OtelSingleton;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.sdk.common.CompletableResultCode;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -93,18 +98,41 @@ public final class StatsigAI {
     return CompletableFuture.completedFuture(null);
   }
 
+  /**
+   * Shuts down the Statsig core (when this instance created it) and flushes pending trace spans.
+   * The tracer provider itself is left running.
+   */
   public CompletableFuture<Void> shutdown() {
-    if (managesCoreLifecycle && statsigServer != null) {
-      return statsigServer.shutdown();
-    }
-    return CompletableFuture.completedFuture(null);
+    CompletableFuture<Void> core =
+        managesCoreLifecycle && statsigServer != null
+            ? statsigServer.shutdown()
+            : CompletableFuture.completedFuture(null);
+    return CompletableFuture.allOf(core, flushTraces());
   }
 
+  /**
+   * Flushes the Statsig core's events (when this instance created the core) and pending trace
+   * spans, so eval grades and the traces they reference are sent together.
+   */
   public CompletableFuture<Void> flushEvents() {
-    if (managesCoreLifecycle && statsigServer != null) {
-      return statsigServer.flushEvents();
-    }
-    return CompletableFuture.completedFuture(null);
+    CompletableFuture<Void> core =
+        managesCoreLifecycle && statsigServer != null
+            ? statsigServer.flushEvents()
+            : CompletableFuture.completedFuture(null);
+    return CompletableFuture.allOf(core, flushTraces());
+  }
+
+  private static CompletableFuture<Void> flushTraces() {
+    CompletableFuture<Void> future = new CompletableFuture<>();
+    CompletableResultCode result = OtelSingleton.flushInstance();
+    result.whenComplete(
+        () -> {
+          if (!result.isSuccess()) {
+            System.err.println("[StatsigAI] Failed to flush trace spans.");
+          }
+          future.complete(null);
+        });
+    return future;
   }
 
   public Prompt getPrompt(StatsigUser user, String promptName) {
@@ -117,31 +145,98 @@ public final class StatsigAI {
   // Eval Grade Logging
   // ------------------------------------------------------------
 
+  /**
+   * Logs a {@code statsig::eval_result} event for a prompt version.
+   *
+   * <p>The grade is joined to a trace through {@code trace_id} / {@code span_id}: those set on
+   * {@code evalGradeData} win, otherwise the active span's IDs are used.
+   */
   public void logEvalGrade(
       StatsigUser user,
-      PromptConfig livePrompt,
+      PromptConfig promptVersion,
       double score,
-      String grader,
+      String graderName,
       AIEvalGradeData evalGradeData) {
     if (!Utils.isValidScore(score)) {
       System.err.println("[StatsigAI] Invalid score provided; skipping eval grade logging.");
       return;
     }
+    AIEvalGradeData evalData = evalGradeData != null ? evalGradeData : new AIEvalGradeData();
 
-    String promptName = livePrompt.getPromptName();
+    String activityID = evalData.getActivityID();
+    StatsigUser eventUser =
+        isSet(activityID)
+            ? withCustomID(user, StatsigTraceConventions.ATTR_ACTIVITY_ID, activityID)
+            : user;
+
+    String traceID = evalData.getTraceID();
+    String spanID = evalData.getSpanID();
+    if (!isSet(traceID) && !isSet(spanID)) {
+      SpanContext spanContext = Span.current().getSpanContext();
+      if (spanContext.isValid()) {
+        traceID = spanContext.getTraceId();
+        spanID = spanContext.getSpanId();
+      }
+    }
+
+    String promptName = promptVersion.getPromptName();
+    String sessionID = evalData.getSessionID();
     Map<String, String> metadata = new HashMap<>();
-    metadata.put("ai_config_name", promptName);
-    metadata.put("grader_id", grader);
     metadata.put("score", String.valueOf(score));
-    metadata.put("version_name", livePrompt.getName());
-    metadata.put("version_id", livePrompt.getId());
-    metadata.put("session_id", evalGradeData.getSessionID());
-    this.statsigServer.logEvent(user, "statsig::eval_result", promptName, metadata);
+    metadata.put("session_id", sessionID != null ? sessionID : "");
+    metadata.put("version_name", promptVersion.getName());
+    metadata.put("version_id", promptVersion.getId());
+    metadata.put("grader_name", graderName);
+    metadata.put("ai_config_name", promptName);
+    metadata.put("is_live", String.valueOf(promptVersion.isLiveForUser()));
+    metadata.put("source", "sdk");
+    if (isSet(traceID)) {
+      metadata.put("trace_id", traceID);
+    }
+    if (isSet(spanID)) {
+      metadata.put("span_id", spanID);
+    }
+    if (isSet(evalData.getReasoning())) {
+      metadata.put("reasoning", evalData.getReasoning());
+    }
+    if (evalData.getMetadata() != null) {
+      for (Map.Entry<String, String> entry : evalData.getMetadata().entrySet()) {
+        if (entry.getKey() != null && entry.getValue() != null) {
+          metadata.put(entry.getKey(), entry.getValue());
+        }
+      }
+    }
+    this.statsigServer.logEvent(eventUser, "statsig::eval_result", promptName, metadata);
   }
 
   // ------------------------------------------------------------
   // Helper methods
   // ------------------------------------------------------------
+
+  private static boolean isSet(String value) {
+    return value != null && !value.isEmpty();
+  }
+
+  // StatsigUser is immutable, so the caller's user is copied rather than modified.
+  private static StatsigUser withCustomID(StatsigUser user, String idType, String id) {
+    Map<String, String> customIDs = new HashMap<>();
+    if (user.getCustomIDs() != null) {
+      customIDs.putAll(user.getCustomIDs());
+    }
+    customIDs.put(idType, id);
+    return new StatsigUser.Builder()
+        .setUserID(user.getUserID())
+        .setCustomIDs(customIDs)
+        .setEmail(user.getEmail())
+        .setIp(user.getIp())
+        .setLocale(user.getLocale())
+        .setAppVersion(user.getAppVersion())
+        .setUserAgent(user.getUserAgent())
+        .setCountry(user.getCountry())
+        .setPrivateAttributes(user.getPrivateAttributes())
+        .setCustom(user.getCustom())
+        .build();
+  }
 
   private String resolvePromptTargetingRules(StatsigUser user, String promptName) {
     String baseParamStoreName = "prompt:" + promptName;
