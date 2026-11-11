@@ -59,6 +59,38 @@ OpenAIClient rawClient = OpenAIOkHttpClient.fromEnv();
 OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
 ```
 
+### Capturing message content
+
+Messages usually hold user input and model output, so by default spans don't record them. To record them, pass an `OpenAIWrapperConfig` with `GenAICaptureOptions`:
+
+| Option | Records |
+| --- | --- |
+| `captureInputMessages` | `gen_ai.input.messages` |
+| `captureOutputMessages` | `gen_ai.output.messages` |
+| `captureSystemInstructions` | `gen_ai.system.instructions` |
+| `captureToolDefinitions` | `gen_ai.tool.definitions` |
+| `captureAll` | all four |
+
+```java
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
+import java.util.Collections;
+
+OpenAIClient wrapped =
+    OpenAIWrapper.wrap(
+        rawClient,
+        OpenAIWrapperConfig.builder()
+            .setCaptureOptions(
+                GenAICaptureOptions.builder()
+                    .captureInputMessages(true)
+                    .captureOutputMessages(true)
+                    .build())
+            .setCustomAttributes(Collections.singletonMap("app.team", "support"))
+            .build());
+```
+
+`setCustomAttributes` adds your own attributes to every model call span; the wrapper's attributes win when a key is the same. JSON attributes, such as the messages, are truncated after `setMaxJsonChars` characters (40,000 by default). A truncated attribute gets `<key>_len` with its full length.
+
 ### Tagging calls with a prompt version
 
 Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withVersion(version, ...)` for a Candidate. Model call spans from `OpenAIWrapper` inside it, and their `statsig::gen_ai` events, get `statsig.llm.prompt_name`, `statsig.llm.prompt_version` and `statsig.llm.prompt_version_id`, which Statsig uses to attribute online eval grades to a version. Both also put the prompt's user in context, like `withStatsigUserContext`.

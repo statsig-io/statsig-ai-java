@@ -255,6 +255,7 @@ public class OpenAITelemetryTest {
 
   private OpenAITelemetry newTelemetry() {
     return new OpenAITelemetry(
+        null,
         (user, name, metadata) -> {
           eventUsers.add(user);
           events.add(metadata);

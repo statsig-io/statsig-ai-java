@@ -1,5 +1,6 @@
 package com.statsig.ai.instrumentation.openai.telemetry;
 
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
 import com.statsig.ai.trace.SpanTelemetry;
 import java.lang.reflect.Method;
 import java.util.*;
@@ -9,6 +10,9 @@ import java.util.*;
  *
  * <p>This class has NO state and NO OpenTelemetry references. It purely parses OpenAI SDK models
  * via reflection.
+ *
+ * <p>Message content (input and output messages, system instructions and tool definitions) is
+ * recorded only when {@link GenAICaptureOptions} asks for it.
  */
 public final class OpenAIAttributes {
 
@@ -20,10 +24,13 @@ public final class OpenAIAttributes {
 
   /** Extracts attributes from ChatCompletionCreateParams. */
   public static void applyRequestAttributes(
-      SpanTelemetry span, String operationName, Object params) {
+      SpanTelemetry span, String operationName, Object params, GenAICaptureOptions capture) {
 
     if (span == null || params == null) {
       return;
+    }
+    if (capture == null) {
+      capture = GenAICaptureOptions.builder().build();
     }
 
     span.setAttribute("gen_ai.operation.name", operationName);
@@ -73,21 +80,25 @@ public final class OpenAIAttributes {
     }
 
     // tools
-    Object tools = readValue(params, "tools");
-    if (tools != null) {
-      span.setJsonAttribute("gen_ai.tool.definitions", tools);
+    if (capture.captureToolDefinitions()) {
+      Object tools = readValue(params, "tools");
+      if (tools != null) {
+        span.setJsonAttribute("gen_ai.tool.definitions", tools);
+      }
     }
 
     // messages
     Object messages = readValue(params, "messages");
-    if (messages != null) {
+    if (messages != null && capture.captureInputMessages()) {
       span.setJsonAttribute("gen_ai.input.messages", messages);
     }
 
     // system instructions (subset)
-    Object systemMessages = filterMessagesByRole(messages, "system");
-    if (systemMessages != null) {
-      span.setJsonAttribute("gen_ai.system.instructions", systemMessages);
+    if (capture.captureSystemInstructions()) {
+      Object systemMessages = filterMessagesByRole(messages, "system");
+      if (systemMessages != null) {
+        span.setJsonAttribute("gen_ai.system.instructions", systemMessages);
+      }
     }
 
     // stop sequences
@@ -98,7 +109,8 @@ public final class OpenAIAttributes {
   }
 
   /** Extracts attributes from OpenAI ChatCompletion response. */
-  public static void applyResponseAttributes(SpanTelemetry span, Object response) {
+  public static void applyResponseAttributes(
+      SpanTelemetry span, Object response, GenAICaptureOptions capture) {
     if (span == null || response == null) {
       return;
     }
@@ -122,7 +134,9 @@ public final class OpenAIAttributes {
       }
 
       // output messages
-      span.setJsonAttribute("gen_ai.output.messages", choices);
+      if (capture != null && capture.captureOutputMessages()) {
+        span.setJsonAttribute("gen_ai.output.messages", choices);
+      }
     }
   }
 
@@ -167,7 +181,9 @@ public final class OpenAIAttributes {
     List<String> filtered = new ArrayList<>();
     for (Object msg : (List<?>) messages) {
       String r = readString(msg, "role");
-      if (role.equals(r)) {
+      // openai-java's ChatCompletionMessageParam is a union with no role(), but system() returns
+      // the system message when it is one.
+      if (role.equals(r) || readValue(msg, role) != null) {
         filtered.add(String.valueOf(msg));
       }
     }

@@ -2,6 +2,8 @@ package com.statsig.ai.instrumentation.openai.handlers;
 
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.services.blocking.chat.ChatCompletionService;
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
 import com.statsig.ai.instrumentation.openai.ReflectionUtils;
 import com.statsig.ai.instrumentation.openai.telemetry.OpenAIAttributes;
 import com.statsig.ai.instrumentation.openai.telemetry.OpenAITelemetry;
@@ -13,18 +15,22 @@ import java.lang.reflect.Proxy;
 public final class ChatCompletionServiceHandler implements InvocationHandler {
 
   private final ChatCompletionService delegate;
-  private final OpenAITelemetry telemetry = new OpenAITelemetry();
+  private final GenAICaptureOptions captureOptions;
+  private final OpenAITelemetry telemetry;
 
-  private ChatCompletionServiceHandler(ChatCompletionService delegate) {
+  private ChatCompletionServiceHandler(ChatCompletionService delegate, OpenAIWrapperConfig config) {
     this.delegate = delegate;
+    this.captureOptions = config.getCaptureOptions();
+    this.telemetry = new OpenAITelemetry(config);
   }
 
-  public static ChatCompletionService wrap(ChatCompletionService delegate) {
+  public static ChatCompletionService wrap(
+      ChatCompletionService delegate, OpenAIWrapperConfig config) {
     return (ChatCompletionService)
         Proxy.newProxyInstance(
             delegate.getClass().getClassLoader(),
             new Class<?>[] {ChatCompletionService.class},
-            new ChatCompletionServiceHandler(delegate));
+            new ChatCompletionServiceHandler(delegate, config));
   }
 
   @Override
@@ -42,9 +48,9 @@ public final class ChatCompletionServiceHandler implements InvocationHandler {
         "openai.chat.completions",
         StatsigTraceConventions.GEN_AI_SPAN_TYPE_CHAT,
         span -> {
-          OpenAIAttributes.applyRequestAttributes(span, "chat.completions", params);
+          OpenAIAttributes.applyRequestAttributes(span, "chat.completions", params, captureOptions);
           Object response = ReflectionUtils.delegateInvoke(method, delegate, args);
-          OpenAIAttributes.applyResponseAttributes(span, response);
+          OpenAIAttributes.applyResponseAttributes(span, response, captureOptions);
           OpenAIAttributes.applyUsageAttributes(span, response);
           return response;
         });
