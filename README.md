@@ -67,32 +67,40 @@ Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withV
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.statsig.ai.PromptConfig;
-import java.util.function.Function;
 
 Prompt prompt = ai.getPrompt(user, "support_bot");
+PromptConfig live = prompt.getLivePrompt();
 
 // openai is a client from OpenAIWrapper.wrap.
-Function<PromptConfig, ChatCompletion> runTurn =
-    version ->
-        openai
-            .chat()
-            .completions()
-            .create(
-                ChatCompletionCreateParams.builder()
-                    .model(version.getModel())
-                    .addUserMessage(input)
-                    .build());
-
-ChatCompletion completion = prompt.withLive(runTurn);
+ChatCompletion completion =
+    prompt.withLive(
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(live.getModel())
+                        .addUserMessage(input)
+                        .build()));
 
 // Try a Candidate on the same input.
 PromptConfig candidate = prompt.getCandidatePrompts()[0];
-ChatCompletion candidateCompletion = prompt.withVersion(candidate, runTurn);
+ChatCompletion candidateCompletion =
+    prompt.withVersion(
+        candidate,
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(candidate.getModel())
+                        .addUserMessage(input)
+                        .build()));
 ```
 
-To pass a lambda inline, give it a block body with `return`, such as `live -> { return openai.chat().completions().create(params); }`. An expression lambda like `live -> openai.chat().completions().create(params)` also matches the `Consumer` overload, so the call doesn't compile.
-
-An inner `withVersion` replaces the outer version. `prompt.withContext(...)` puts only the prompt name and the user in context, for code that runs before a version is chosen.
+An inner `withVersion` replaces the outer version. `prompt.withContext(...)` sets only the prompt name and the user, for code that runs before a version is chosen, and keeps any version already in context.
 
 Template variables (`statsig.llm.prompt_template_variables`) aren't recorded yet, since the Java SDK doesn't render prompt templates.
 

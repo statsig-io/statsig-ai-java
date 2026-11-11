@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.openai.client.OpenAIClient;
+import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.services.blocking.ChatService;
 import com.openai.services.blocking.chat.ChatCompletionService;
@@ -56,9 +57,10 @@ public class PromptContextTest {
   @Test
   public void withLiveSetsPromptAndUserContext() throws Exception {
     Prompt prompt = buildPrompt("prompt-user");
+    PromptConfig live = prompt.getLivePrompt();
 
     prompt.withLive(
-        live -> {
+        () -> {
           Context ctx = Context.current();
           assertEquals(prompt.getName(), ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT));
           assertEquals(live.getName(), ctx.get(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION));
@@ -68,7 +70,6 @@ public class PromptContextTest {
           assertNotNull(userCtx);
           assertEquals("prompt-user", userCtx.getUserID());
           assertEquals(Collections.singletonMap("cohort", "beta"), userCtx.getCustomIDs());
-          return null;
         });
 
     assertNull(StatsigContextUtils.getActiveUser(Context.current()));
@@ -81,8 +82,7 @@ public class PromptContextTest {
 
     String result =
         prompt.withLive(
-            live -> {
-              assertSame(prompt.getLivePrompt(), live);
+            () -> {
               assertEquals(
                   promptAttrs(PROMPT_NAME, LIVE_VERSION_NAME, LIVE_VERSION_ID),
                   StatsigContextUtils.getPromptSpanAttrs(Context.current()));
@@ -98,36 +98,50 @@ public class PromptContextTest {
     PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
 
-    PromptConfig ran =
+    String result =
         prompt.withVersion(
             candidate,
-            version -> {
+            () -> {
               assertEquals(
                   promptAttrs(PROMPT_NAME, "Candidate B", "candidate-b"),
                   StatsigContextUtils.getPromptSpanAttrs(Context.current()));
               assertEquals(
                   "prompt-user", StatsigContextUtils.getActiveUser(Context.current()).getUserID());
-              return version;
+              return "candidate-result";
             });
 
-    assertSame(candidate, ran);
+    assertEquals("candidate-result", result);
     assertTrue(StatsigContextUtils.getPromptSpanAttrs(Context.current()).isEmpty());
     assertNull(StatsigContextUtils.getActiveUser(Context.current()));
   }
 
   @Test
-  public void withVersionRunsAConsumer() throws Exception {
+  public void withVersionRunsARunnable() throws Exception {
     PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
     AtomicReference<Map<String, String>> attrs = new AtomicReference<Map<String, String>>();
 
     prompt.withVersion(
-        candidate,
-        version -> {
-          attrs.set(StatsigContextUtils.getPromptSpanAttrs(Context.current()));
-        });
+        candidate, () -> attrs.set(StatsigContextUtils.getPromptSpanAttrs(Context.current())));
 
     assertEquals(promptAttrs(PROMPT_NAME, "Candidate B", "candidate-b"), attrs.get());
+  }
+
+  @Test
+  public void valueReturningExpressionLambdasPickTheSupplierOverload() throws Exception {
+    ChatCompletionCreateParams params = mock(ChatCompletionCreateParams.class);
+    ChatCompletion completion = mock(ChatCompletion.class);
+    OpenAIClient client = mockOpenAIClient(params, completion);
+    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    Prompt prompt = buildPrompt("prompt-user", candidate);
+
+    // These only compile if the expression lambda resolves to Supplier rather than Runnable.
+    ChatCompletion live = prompt.withLive(() -> client.chat().completions().create(params));
+    ChatCompletion candidateCompletion =
+        prompt.withVersion(candidate, () -> client.chat().completions().create(params));
+
+    assertSame(completion, live);
+    assertSame(completion, candidateCompletion);
   }
 
   @Test
@@ -138,29 +152,25 @@ public class PromptContextTest {
     Prompt prompt = buildPrompt("prompt-user", candidate, noID);
 
     prompt.withLive(
-        live -> {
+        () -> {
           prompt.withVersion(
               candidate,
-              version -> {
-                assertEquals(
-                    promptAttrs(PROMPT_NAME, "Candidate B", "candidate-b"),
-                    StatsigContextUtils.getPromptSpanAttrs(Context.current()));
-                return null;
-              });
+              () ->
+                  assertEquals(
+                      promptAttrs(PROMPT_NAME, "Candidate B", "candidate-b"),
+                      StatsigContextUtils.getPromptSpanAttrs(Context.current())));
           // The inner version doesn't inherit the live version's ID.
           prompt.withVersion(
               noID,
-              version -> {
+              () -> {
                 Map<String, String> expected = new HashMap<String, String>();
                 expected.put(StatsigTraceConventions.ATTR_LLM_PROMPT_NAME, PROMPT_NAME);
                 expected.put(StatsigTraceConventions.ATTR_LLM_PROMPT_VERSION, "Draft");
                 assertEquals(expected, StatsigContextUtils.getPromptSpanAttrs(Context.current()));
-                return null;
               });
           assertEquals(
               promptAttrs(PROMPT_NAME, LIVE_VERSION_NAME, LIVE_VERSION_ID),
               StatsigContextUtils.getPromptSpanAttrs(Context.current()));
-          return null;
         });
   }
 
@@ -193,6 +203,23 @@ public class PromptContextTest {
   }
 
   @Test
+  public void withContextKeepsTheOuterVersion() throws Exception {
+    PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
+    Prompt prompt = buildPrompt("prompt-user", candidate);
+    Prompt other =
+        new Prompt("other_prompt", prompt.getLivePrompt(), new PromptConfig[0], prompt.getUser());
+
+    prompt.withVersion(
+        candidate,
+        () ->
+            other.withContext(
+                () ->
+                    assertEquals(
+                        promptAttrs("other_prompt", "Candidate B", "candidate-b"),
+                        StatsigContextUtils.getPromptSpanAttrs(Context.current()))));
+  }
+
+  @Test
   public void modelSpansInsideWithVersionGetThePromptVersionAndUser() throws Exception {
     InMemorySpanExporter exporter = InMemorySpanExporter.create();
     tracerProvider =
@@ -202,22 +229,12 @@ public class PromptContextTest {
     resetOtelSingleton();
     OtelSingleton.instantiate(tracerProvider);
 
-    OpenAIClient client = mock(OpenAIClient.class);
-    ChatService chatService = mock(ChatService.class);
-    ChatCompletionService chatCompletionService = mock(ChatCompletionService.class);
-    when(client.chat()).thenReturn(chatService);
-    when(chatService.completions()).thenReturn(chatCompletionService);
     ChatCompletionCreateParams params = mock(ChatCompletionCreateParams.class);
-    when(chatCompletionService.create(params)).thenReturn(null);
-    OpenAIClient wrapped = OpenAIWrapper.wrap(client);
+    OpenAIClient wrapped = OpenAIWrapper.wrap(mockOpenAIClient(params, null));
 
     PromptConfig candidate = version("prompt:candidate-b", "Candidate B");
     Prompt prompt = buildPrompt("prompt-user", candidate);
-    prompt.withVersion(
-        candidate,
-        version -> {
-          return wrapped.chat().completions().create(params);
-        });
+    prompt.withVersion(candidate, () -> wrapped.chat().completions().create(params));
     wrapped.chat().completions().create(params);
 
     List<SpanData> spans = exporter.getFinishedSpanItems();
@@ -236,6 +253,17 @@ public class PromptContextTest {
     assertNull(outside.get(AttributeKey.stringKey("statsig.llm.prompt_version")));
     assertNull(outside.get(AttributeKey.stringKey("statsig.llm.prompt_version_id")));
     assertNull(outside.get(AttributeKey.stringKey("statsig.user_id")));
+  }
+
+  private static OpenAIClient mockOpenAIClient(
+      ChatCompletionCreateParams params, ChatCompletion result) {
+    OpenAIClient client = mock(OpenAIClient.class);
+    ChatService chatService = mock(ChatService.class);
+    ChatCompletionService chatCompletionService = mock(ChatCompletionService.class);
+    when(client.chat()).thenReturn(chatService);
+    when(chatService.completions()).thenReturn(chatCompletionService);
+    when(chatCompletionService.create(params)).thenReturn(result);
+    return client;
   }
 
   private static Map<String, String> promptAttrs(

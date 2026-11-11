@@ -174,20 +174,4 @@ public class StatsigContextUtilsTest {
                 StatsigContextUtils.withPromptVersion(Context.root(), "", null, ""))
             .isEmpty());
   }
-
-  @Test
-  public void withPromptOnlySetsTheValuesItIsGiven() {
-    Context outer = StatsigContextUtils.withPromptVersion(Context.root(), "bot", "V1", "v1-id");
-
-    assertEquals(
-        attrs(
-            "statsig.llm.prompt_name",
-            "other-bot",
-            "statsig.llm.prompt_version",
-            "V1",
-            "statsig.llm.prompt_version_id",
-            "v1-id"),
-        StatsigContextUtils.getPromptSpanAttrs(
-            StatsigContextUtils.withPrompt(outer, "other-bot", null)));
-  }
 }

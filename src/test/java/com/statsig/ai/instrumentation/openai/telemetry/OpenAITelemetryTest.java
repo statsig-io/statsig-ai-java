@@ -122,7 +122,8 @@ public class OpenAITelemetryTest {
 
   @Test
   public void genAIEventMetadataHasOnlyThePromptNameWithoutAVersion() throws Throwable {
-    Context ctx = StatsigContextUtils.withPrompt(Context.current(), "support_bot", null);
+    Context ctx =
+        StatsigContextUtils.withPromptVersion(Context.current(), "support_bot", null, null);
 
     try (Scope ignored = ctx.makeCurrent()) {
       telemetry.trace("openai.chat.completions", "chat", span -> "ok");

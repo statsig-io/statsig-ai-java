@@ -30,21 +30,6 @@ public final class StatsigContextUtils {
   // ----------------------------------------------------------------------
 
   /**
-   * Returns {@code ctx} with the prompt name and version name, skipping a null or empty value.
-   * Unlike {@link #withPromptVersion}, it keeps any value in {@code ctx} that it doesn't set,
-   * including the version ID.
-   */
-  public static Context withPrompt(Context ctx, String promptName, String promptVersion) {
-    if (promptName != null && !promptName.isEmpty()) {
-      ctx = ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT, promptName);
-    }
-    if (promptVersion != null && !promptVersion.isEmpty()) {
-      ctx = ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION, promptVersion);
-    }
-    return ctx;
-  }
-
-  /**
    * Returns {@code ctx} with the prompt name, version name and version ID. OpenAI model call spans
    * started in it, and their {@code statsig::gen_ai} events, get the attributes from {@link
    * #getPromptSpanAttrs}.

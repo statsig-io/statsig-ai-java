@@ -5,11 +5,10 @@ import com.statsig.ParameterStore;
 import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.trace.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigTraceConventions;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import java.util.Objects;
-import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 public class Prompt {
@@ -42,20 +41,20 @@ public class Prompt {
   }
 
   /**
-   * Runs {@code block} with the live version active, and returns its result. See {@link
-   * #withVersion(PromptConfig, Function)}.
+   * Runs {@code body} with the live version active, and returns its result. Get the live version
+   * from {@link #getLivePrompt()}. See {@link #withVersion(PromptConfig, Supplier)}.
    */
-  public <R> R withLive(Function<PromptConfig, R> block) {
-    Objects.requireNonNull(block, "block");
-    return withVersion(this.live, block);
+  public <R> R withLive(Supplier<R> body) {
+    Objects.requireNonNull(body, "body");
+    return withVersion(this.live, body);
   }
 
-  /** Runs {@code consumer} with the live version active. See {@link #withLive(Function)}. */
-  public void withLive(Consumer<PromptConfig> consumer) {
-    Objects.requireNonNull(consumer, "consumer");
+  /** Runs {@code body} with the live version active. See {@link #withLive(Supplier)}. */
+  public void withLive(Runnable body) {
+    Objects.requireNonNull(body, "body");
     withLive(
-        liveConfig -> {
-          consumer.accept(liveConfig);
+        () -> {
+          body.run();
           return null;
         });
   }
@@ -71,7 +70,7 @@ public class Prompt {
    * <p>Use it with a candidate from {@link #getCandidatePrompts()}. An inner version replaces an
    * outer one.
    */
-  public <R> R withVersion(PromptConfig version, Function<PromptConfig, R> body) {
+  public <R> R withVersion(PromptConfig version, Supplier<R> body) {
     Objects.requireNonNull(version, "version");
     Objects.requireNonNull(body, "body");
     Context ctx =
@@ -79,39 +78,43 @@ public class Prompt {
             Context.current(), this.name, version.getName(), version.getId());
     ctx = StatsigContextUtils.withUser(ctx, this.user);
     try (Scope scope = ctx.makeCurrent()) {
-      return body.apply(version);
+      return body.get();
     }
   }
 
   /**
    * Runs {@code body} with {@code version} active. See {@link #withVersion(PromptConfig,
-   * Function)}.
+   * Supplier)}.
    */
-  public void withVersion(PromptConfig version, Consumer<PromptConfig> body) {
+  public void withVersion(PromptConfig version, Runnable body) {
     Objects.requireNonNull(body, "body");
     withVersion(
         version,
-        config -> {
-          body.accept(config);
+        () -> {
+          body.run();
           return null;
         });
   }
 
   /**
-   * Runs {@code supplier} with this prompt's name and user in context, and returns its result.
-   * Spans started inside it get {@code statsig.llm.prompt_name} but no version, so use it for code
-   * that runs before a version is chosen.
+   * Runs {@code supplier} with this prompt's name and user in context, and returns its result, for
+   * code that runs before a version is chosen. Spans started inside it get {@code
+   * statsig.llm.prompt_name}. It keeps any version already in context, so inside {@link
+   * #withVersion(PromptConfig, Supplier)} they also get that version.
    */
   public <R> R withContext(Supplier<R> supplier) {
     Objects.requireNonNull(supplier, "supplier");
-    Context ctx = Context.current();
-    ctx = StatsigContextUtils.withPrompt(ctx, this.name, null);
+    Context ctx = withPromptName(Context.current());
     ctx = StatsigContextUtils.withUser(ctx, this.user);
     try (Scope scope = ctx.makeCurrent()) {
       return supplier.get();
     }
   }
 
+  /**
+   * Runs {@code runnable} with this prompt's name and user in context. See {@link
+   * #withContext(Supplier)}.
+   */
   public void withContext(Runnable runnable) {
     Objects.requireNonNull(runnable, "runnable");
     withContext(
@@ -119,6 +122,11 @@ public class Prompt {
           runnable.run();
           return null;
         });
+  }
+
+  // Sets only the prompt name, keeping any version and version ID already in ctx.
+  private Context withPromptName(Context ctx) {
+    return ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT, this.name == null ? "" : this.name);
   }
 
   static Prompt makePrompt(Statsig statsigServer, StatsigUser user, String promptName) {
