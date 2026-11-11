@@ -59,20 +59,40 @@ public final class OpenAIAttributes {
 
   /**
    * Returns the request body of an OpenAI SDK params object as plain JSON, or an empty map when it
-   * can't be read.
+   * can't be read. Structured-output params are read from their raw params.
    */
   public static Map<String, Object> toPlainRequest(Object params) {
     if (params == null) {
       return Collections.emptyMap();
     }
-    Object body = params;
-    try {
-      Method bodyMethod = params.getClass().getMethod("_body");
-      body = bodyMethod.invoke(params);
-    } catch (Exception ignore) {
-      // Params without a body are serialized as they are.
-    }
+    Object raw = invokeIfPresent(params, "rawParams");
+    Object body = invokeIfPresent(raw, "_body");
     return toPlainMap(body);
+  }
+
+  /**
+   * Returns an OpenAI SDK response as plain JSON. Structured-output responses are read from their
+   * raw response.
+   */
+  public static Map<String, Object> toPlainResponse(Object response) {
+    Object raw = invokeIfPresent(response, "rawChatCompletion");
+    raw = invokeIfPresent(raw, "rawResponse");
+    return toPlainMap(raw);
+  }
+
+  // Returns target.name(), or target itself when it has no such method.
+  private static Object invokeIfPresent(Object target, String name) {
+    if (target == null) {
+      return null;
+    }
+    try {
+      Method method = target.getClass().getMethod(name);
+      return method.invoke(target);
+    } catch (NoSuchMethodException e) {
+      return target;
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   /** {@link #toPlain} as a map, or an empty map when it isn't one. */
@@ -214,6 +234,154 @@ public final class OpenAIAttributes {
 
     attrs.putAll(usageAttributes(map(response.get("usage"))));
     return attrs;
+  }
+
+  /**
+   * Attributes of a streamed response, from its chunks or events as plain JSON, a port of Node's
+   * {@code parseOAIStreamingResponseIntoAttributes}. Chat Completions deltas, including tool call
+   * deltas, are joined into whole messages, and a Responses stream is read from the response on its
+   * events. Usage is summed across chunks.
+   */
+  public static Map<String, Object> streamAttributes(
+      List<Map<String, Object>> chunks, GenAICaptureOptions capture) {
+    Map<String, Object> attrs = new LinkedHashMap<String, Object>();
+    if (chunks.isEmpty()) {
+      return attrs;
+    }
+    Object id = null;
+    Object model = null;
+    Map<String, Object> responsesResult = null;
+    Map<String, Object> usageAttrs = new LinkedHashMap<String, Object>();
+    Map<Long, StreamedChoice> choices = new LinkedHashMap<Long, StreamedChoice>();
+
+    for (Map<String, Object> event : chunks) {
+      // Responses stream events carry the response.
+      Map<String, Object> chunk =
+          event.get("response") instanceof Map ? map(event.get("response")) : event;
+      id = firstNonNull(id, chunk.get("id"));
+      model = firstNonNull(model, chunk.get("model"));
+      if (chunk.get("output") instanceof List) {
+        responsesResult = chunk;
+      }
+      for (Map.Entry<String, Object> usage : usageAttributes(map(chunk.get("usage"))).entrySet()) {
+        Number previous = number(usageAttrs.get(usage.getKey()));
+        long sum =
+            (previous == null ? 0L : previous.longValue()) + number(usage.getValue()).longValue();
+        usageAttrs.put(usage.getKey(), sum);
+      }
+
+      List<Object> chunkChoices = list(chunk.get("choices"));
+      if (chunkChoices == null || chunkChoices.isEmpty()) {
+        continue;
+      }
+      Map<String, Object> choice = map(chunkChoices.get(0));
+      Number index = number(choice.get("index"));
+      long key = index == null ? 0L : index.longValue();
+      StreamedChoice streamed = choices.get(key);
+      if (streamed == null) {
+        streamed = new StreamedChoice(key);
+        choices.put(key, streamed);
+      }
+      streamed.add(map(choice.get("delta")), choice.get("finish_reason"));
+    }
+
+    put(attrs, "gen_ai.response.id", id);
+    put(attrs, "gen_ai.response.model", model);
+    attrs.putAll(usageAttrs);
+    List<Object> finishReasons = new ArrayList<Object>();
+    List<Object> choiceList = new ArrayList<Object>();
+    for (StreamedChoice choice : choices.values()) {
+      finishReasons.add(choice.finishReason);
+      choiceList.add(choice.toChoice());
+    }
+    attrs.put("gen_ai.response.finish_reasons", finishReasons);
+    if (capture != null && capture.captureOutputMessages()) {
+      Map<String, Object> result = responsesResult;
+      if (result == null) {
+        result = Collections.<String, Object>singletonMap("choices", choiceList);
+      }
+      put(attrs, "gen_ai.output.messages", OpenAIMessages.toOutputMessages(result));
+    }
+    return attrs;
+  }
+
+  // One choice's deltas, joined like Node's aggregateStreamedChoices.
+  private static final class StreamedChoice {
+    private final long index;
+    private Object role;
+    private final StringBuilder content = new StringBuilder();
+    private final List<Map<String, Object>> toolCalls = new ArrayList<Map<String, Object>>();
+    private Object finishReason;
+
+    StreamedChoice(long index) {
+      this.index = index;
+    }
+
+    void add(Map<String, Object> delta, Object finish) {
+      if (delta.get("role") != null) {
+        role = delta.get("role");
+      }
+      if (delta.get("content") instanceof String) {
+        content.append((String) delta.get("content"));
+      }
+      List<Object> toolCallDeltas = list(delta.get("tool_calls"));
+      if (toolCallDeltas != null) {
+        for (Object toolCallDelta : toolCallDeltas) {
+          addToolCall(map(toolCallDelta));
+        }
+      }
+      if (finish != null) {
+        finishReason = finish;
+      }
+    }
+
+    private void addToolCall(Map<String, Object> delta) {
+      Number deltaIndex = number(delta.get("index"));
+      int i = deltaIndex == null ? 0 : deltaIndex.intValue();
+      while (toolCalls.size() <= i) {
+        toolCalls.add(null);
+      }
+      Map<String, Object> toolCall = toolCalls.get(i);
+      if (toolCall == null) {
+        toolCall = new LinkedHashMap<String, Object>();
+        toolCall.put("type", "function");
+        Map<String, Object> function = new LinkedHashMap<String, Object>();
+        function.put("arguments", "");
+        toolCall.put("function", function);
+        toolCalls.set(i, toolCall);
+      }
+      Map<String, Object> function = map(toolCall.get("function"));
+      if (toolCall.get("id") == null && delta.get("id") != null) {
+        toolCall.put("id", delta.get("id"));
+      }
+      Object name = get(delta, "function", "name");
+      if (function.get("name") == null && name != null) {
+        function.put("name", name);
+      }
+      Object arguments = get(delta, "function", "arguments");
+      function.put(
+          "arguments", function.get("arguments") + (arguments == null ? "" : arguments.toString()));
+    }
+
+    Map<String, Object> toChoice() {
+      Map<String, Object> message = new LinkedHashMap<String, Object>();
+      message.put("role", role);
+      message.put("content", content.toString());
+      List<Map<String, Object>> calls = new ArrayList<Map<String, Object>>();
+      for (Map<String, Object> toolCall : toolCalls) {
+        if (toolCall != null) {
+          calls.add(toolCall);
+        }
+      }
+      if (!calls.isEmpty()) {
+        message.put("tool_calls", calls);
+      }
+      Map<String, Object> choice = new LinkedHashMap<String, Object>();
+      choice.put("index", index);
+      choice.put("message", message);
+      choice.put("finish_reason", finishReason);
+      return choice;
+    }
   }
 
   /**

@@ -16,7 +16,7 @@ public class OpenAIWrapperTest {
 
   @Test
   public void wrapValidatesInputs() {
-    assertThrows(NullPointerException.class, () -> OpenAIWrapper.wrap(null));
+    assertThrows(NullPointerException.class, () -> OpenAIWrapper.wrap((OpenAIClient) null));
     OpenAIClient client = mock(OpenAIClient.class);
     assertNotNull(OpenAIWrapper.wrap(client));
   }

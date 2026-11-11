@@ -48,15 +48,32 @@ ai.logEvalGrade(
 
 ## Instrumentation (early preview)
 
-The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span. Spans have the same names and attributes as the Node SDK's: the span is named `<operation> <model>`, such as `chat gpt-4o`, with `gen_ai.operation.name`, `gen_ai.provider.name`, the request settings, token usage, and `statsig.gen_ai.server.time_to_first_token_ms`. Messages use the [OpenTelemetry GenAI format](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/), `{role, parts}`.
+The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records these OpenAI calls as OpenTelemetry spans, on both the blocking and the async client:
+
+| Call | Operation |
+| --- | --- |
+| `chat().completions().create(...)` and `createStreaming(...)` | `chat` |
+| `completions().create(...)` and `createStreaming(...)` | `text_completion` |
+| `embeddings().create(...)` | `embeddings` |
+| `images().generate(...)` | `generate_content` |
+| `responses().create(...)` and `createStreaming(...)`, including structured outputs | `generate_content` |
+
+A streaming call's span records the time to the first chunk, rebuilds the response from the chunks, and ends when you've read the stream to the end or closed it. An async call's span ends when its future completes. Other calls are passed through untraced.
+
+Spans have the same names and attributes as the Node SDK's: the span is named `<operation> <model>`, such as `chat gpt-4o`, with `gen_ai.operation.name`, `gen_ai.provider.name`, the request settings, token usage, and `statsig.gen_ai.server.time_to_first_token_ms`. Messages use the [OpenTelemetry GenAI format](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/), `{role, parts}`.
 
 ```java
 import com.openai.client.OpenAIClient;
+import com.openai.client.OpenAIClientAsync;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
 import com.statsig.ai.instrumentation.openai.OpenAIWrapper;
 
 OpenAIClient rawClient = OpenAIOkHttpClient.fromEnv();
 OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
+
+// Async: wrap an OpenAIClientAsync, or call wrapped.async().
+OpenAIClientAsync wrappedAsync = OpenAIWrapper.wrap(OpenAIOkHttpClientAsync.fromEnv());
 ```
 
 ### Capturing message content

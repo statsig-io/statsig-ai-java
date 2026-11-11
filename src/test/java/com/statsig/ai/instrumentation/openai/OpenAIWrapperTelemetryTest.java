@@ -65,7 +65,7 @@ public class OpenAIWrapperTelemetryTest {
 
   @Test
   public void wrapRequiresValidInputs() {
-    assertThrows(NullPointerException.class, () -> OpenAIWrapper.wrap(null));
+    assertThrows(NullPointerException.class, () -> OpenAIWrapper.wrap((OpenAIClient) null));
   }
 
   @Test
