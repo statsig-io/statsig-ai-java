@@ -2,26 +2,26 @@ package com.statsig.ai.instrumentation.openai.handlers;
 
 import com.openai.services.blocking.ChatService;
 import com.openai.services.blocking.chat.ChatCompletionService;
-import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
+import com.statsig.ai.instrumentation.GenAITelemetry;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
 public final class ChatServiceHandler implements InvocationHandler {
   private final ChatService delegate;
-  private final OpenAIWrapperConfig config;
+  private final GenAITelemetry telemetry;
 
-  private ChatServiceHandler(ChatService delegate, OpenAIWrapperConfig config) {
+  private ChatServiceHandler(ChatService delegate, GenAITelemetry telemetry) {
     this.delegate = delegate;
-    this.config = config;
+    this.telemetry = telemetry;
   }
 
-  public static ChatService wrap(ChatService service, OpenAIWrapperConfig config) {
+  public static ChatService wrap(ChatService service, GenAITelemetry telemetry) {
     return (ChatService)
         Proxy.newProxyInstance(
             service.getClass().getClassLoader(),
             new Class<?>[] {ChatService.class},
-            new ChatServiceHandler(service, config));
+            new ChatServiceHandler(service, telemetry));
   }
 
   @Override
@@ -29,7 +29,7 @@ public final class ChatServiceHandler implements InvocationHandler {
 
     if ("completions".equals(method.getName())) {
       ChatCompletionService completions = (ChatCompletionService) method.invoke(delegate, args);
-      return ChatCompletionServiceHandler.wrap(completions, config);
+      return ChatCompletionServiceHandler.wrap(completions, telemetry);
     }
 
     return method.invoke(delegate, args);

@@ -4,7 +4,6 @@ import com.statsig.Statsig;
 import com.statsig.StatsigUser;
 import com.statsig.ai.StatsigAI;
 import com.statsig.ai.trace.singleton.OtelSingleton;
-import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.*;
 import io.opentelemetry.context.Context;
 import java.lang.reflect.Array;
@@ -12,17 +11,24 @@ import java.util.*;
 
 /**
  * Wraps an OTEL Span with attribute helpers, JSON truncation, exception handling, metadata
- * aggregation, and Statsig event logging. OpenAI model call spans and {@link GenAISpans} spans each
- * log one {@code statsig::gen_ai} event through it when they end.
+ * aggregation, and Statsig event logging. Model call spans and {@link GenAISpans} spans each log
+ * one {@code statsig::gen_ai} event through it when they end.
+ *
+ * <p>Like the Node SDK, strings, booleans and numbers are recorded as they are, and anything else,
+ * including lists and arrays, as JSON.
  */
 public final class SpanTelemetry {
 
-  public static final int DEFAULT_MAX_JSON_CHARS = 4096;
+  public static final int DEFAULT_MAX_JSON_CHARS = 40_000;
 
   /** The user ID {@code statsig::gen_ai} events are logged with. */
   public static final String GEN_AI_EVENT_USER_ID = "statsig-ai-openai-wrapper";
 
   private static final String EVENT_USER_CUSTOM_ID_ENVIRONMENT = "environment";
+
+  /** Milliseconds from the span's start to the first token or response. */
+  public static final String ATTR_TIME_TO_FIRST_TOKEN_MS =
+      "statsig.gen_ai.server.time_to_first_token_ms";
 
   private final Span span;
   private final String spanName;
@@ -84,30 +90,21 @@ public final class SpanTelemetry {
       return;
     }
 
-    if (value instanceof List) {
-      List<?> list = (List<?>) value;
-      List<String> strs = new ArrayList<String>();
-      for (Object o : list) {
-        if (o != null) strs.add(String.valueOf(o));
-      }
-      span.setAttribute(AttributeKey.stringArrayKey(key), strs);
-      metadata.put(key, safeStringify(strs));
-      return;
-    }
-
-    if (value.getClass().isArray()) {
-      int len = Array.getLength(value);
-      List<Object> arr = new ArrayList<Object>(len);
-      for (int i = 0; i < len; i++) {
-        arr.add(Array.get(value, i));
-      }
-      setAttribute(key, arr);
-      return;
-    }
-
     setJsonAttribute(key, value);
   }
 
+  /** Sets each entry with {@link #setAttribute}. Null values are skipped. */
+  public void setAttributes(Map<String, ?> attributes) {
+    if (attributes == null) return;
+    for (Map.Entry<String, ?> entry : attributes.entrySet()) {
+      setAttribute(entry.getKey(), entry.getValue());
+    }
+  }
+
+  /**
+   * Records {@code value} as JSON, truncated after the max JSON length, and its full length as
+   * {@code <key>_len}.
+   */
   public void setJsonAttribute(String key, Object value) {
     if (key == null) return;
 
@@ -119,9 +116,8 @@ public final class SpanTelemetry {
     span.setAttribute(key, rendered);
     metadata.put(key, rendered);
 
-    if (truncated) {
-      span.setAttribute(key + "_len", json.length());
-    }
+    span.setAttribute(key + "_len", (long) json.length());
+    metadata.put(key + "_len", String.valueOf(json.length()));
   }
 
   // ----------------------------------------------------------------------
@@ -166,11 +162,13 @@ public final class SpanTelemetry {
   // Timing
   // ----------------------------------------------------------------------
 
+  /** Records the milliseconds since the span started as {@link #ATTR_TIME_TO_FIRST_TOKEN_MS}. */
   public void recordTimeToFirstToken() {
-    long ms = (System.nanoTime() - startNano) / 1_000_000;
-    double sec = ms / 1000.0;
-    setAttribute("gen_ai.server.time_to_first_token", sec);
-    setAttribute("gen_ai.server.time_to_first_token_ms", ms);
+    setAttribute(ATTR_TIME_TO_FIRST_TOKEN_MS, elapsedMillis());
+  }
+
+  private long elapsedMillis() {
+    return Math.round((System.nanoTime() - startNano) / 1_000_000.0);
   }
 
   // ----------------------------------------------------------------------
@@ -179,7 +177,8 @@ public final class SpanTelemetry {
 
   /**
    * Ends the span and logs its {@code statsig::gen_ai} event, with the activity ID from the current
-   * context. Does nothing when the span has already ended.
+   * context. The event metadata has the span's attributes and status, and its {@code duration} in
+   * milliseconds. Does nothing when the span has already ended.
    */
   public void end() {
     end(Context.current());
@@ -196,10 +195,10 @@ public final class SpanTelemetry {
 
     span.end();
 
+    Map<String, String> eventMetadata = new HashMap<String, String>(metadata);
+    eventMetadata.put("duration", String.valueOf(elapsedMillis()));
     eventLogger.log(
-        eventUser(environment, ctx),
-        spanName,
-        Collections.unmodifiableMap(new HashMap<String, String>(metadata)));
+        eventUser(environment, ctx), spanName, Collections.unmodifiableMap(eventMetadata));
   }
 
   /**
@@ -246,7 +245,7 @@ public final class SpanTelemetry {
      * @param user the event user: {@code statsig-ai-openai-wrapper}, with the tracer's environment
      *     and the activity ID as custom IDs when they're set
      * @param name the span name
-     * @param metadata the span's attributes and status
+     * @param metadata the span's attributes and status, and its {@code duration} in milliseconds
      */
     void log(StatsigUser user, String name, Map<String, String> metadata);
 

@@ -1,15 +1,21 @@
-package com.statsig.ai.instrumentation.openai.telemetry;
+package com.statsig.ai.instrumentation;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.statsig.StatsigUser;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
 import com.statsig.ai.trace.StatsigContextUtils;
 import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
@@ -18,8 +24,10 @@ import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -28,12 +36,12 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-public class OpenAITelemetryTest {
+public class GenAITelemetryTest {
   private InMemorySpanExporter spanExporter;
   private SdkTracerProvider tracerProvider;
   private List<Map<String, String>> events;
   private List<StatsigUser> eventUsers;
-  private OpenAITelemetry telemetry;
+  private GenAITelemetry telemetry;
 
   @Before
   public void setUp() throws Exception {
@@ -70,7 +78,7 @@ public class OpenAITelemetryTest {
             "activity-1");
 
     try (Scope ignored = ctx.makeCurrent()) {
-      assertEquals("ok", telemetry.trace("openai.chat.completions", "chat", span -> "ok"));
+      assertEquals("ok", trace("chat gpt-4o"));
     }
 
     String customIDs = "{\"org\":\"acme\",\"statsig.activity_id\":\"activity-1\"}";
@@ -88,7 +96,7 @@ public class OpenAITelemetryTest {
 
   @Test
   public void genAIEventMetadataHasNoStatsigContextOutsideOne() throws Throwable {
-    telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    trace("chat gpt-4o");
 
     assertEquals(1, events.size());
     Map<String, String> metadata = events.get(0);
@@ -107,7 +115,7 @@ public class OpenAITelemetryTest {
             Context.current(), "support_bot", "Candidate B", "candidate-b");
 
     try (Scope ignored = ctx.makeCurrent()) {
-      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+      trace("chat gpt-4o");
     }
 
     assertEquals(1, events.size());
@@ -133,7 +141,7 @@ public class OpenAITelemetryTest {
         StatsigContextUtils.withPromptVersion(Context.current(), "support_bot", null, null);
 
     try (Scope ignored = ctx.makeCurrent()) {
-      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+      trace("chat gpt-4o");
     }
 
     Map<String, String> metadata = events.get(0);
@@ -152,7 +160,7 @@ public class OpenAITelemetryTest {
             Collections.singletonMap("traceparent", "00-" + traceID + "-" + spanID + "-01"));
 
     try (Scope ignored = ctx.makeCurrent()) {
-      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+      trace("chat gpt-4o");
     }
 
     SpanData span = spanExporter.getFinishedSpanItems().get(0);
@@ -166,7 +174,7 @@ public class OpenAITelemetryTest {
     StatsigContextUtils.withStatsigContext(
         new StatsigUser.Builder().setUserID("someone").build(),
         null,
-        () -> traceOrFail("openai.chat.completions"));
+        () -> traceOrFail("chat gpt-4o"));
 
     assertEquals(1, eventUsers.size());
     StatsigUser user = eventUsers.get(0);
@@ -180,9 +188,8 @@ public class OpenAITelemetryTest {
     OtelSingleton.instantiate(tracerProvider, "staging");
     telemetry = newTelemetry();
 
-    StatsigContextUtils.withStatsigContext(
-        null, "activity-1", () -> traceOrFail("openai.chat.completions"));
-    traceOrFail("openai.chat.completions");
+    StatsigContextUtils.withStatsigContext(null, "activity-1", () -> traceOrFail("chat gpt-4o"));
+    traceOrFail("chat gpt-4o");
 
     assertEquals(2, eventUsers.size());
     Map<String, String> both = new HashMap<String, String>();
@@ -197,11 +204,11 @@ public class OpenAITelemetryTest {
 
   @Test
   public void modelCallOutsideAnotherRootIsTheLLMRoot() throws Throwable {
-    telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+    trace("chat gpt-4o");
     // An empty root counts as none.
     try (Scope ignored =
         Context.current().with(StatsigTraceConventions.CTX_GEN_AI_ROOT, "").makeCurrent()) {
-      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+      trace("chat gpt-4o");
     }
 
     List<SpanData> spans = spanExporter.getFinishedSpanItems();
@@ -219,7 +226,7 @@ public class OpenAITelemetryTest {
         Context.current()
             .with(StatsigTraceConventions.CTX_GEN_AI_ROOT, "invoke_workflow")
             .makeCurrent()) {
-      telemetry.trace("openai.chat.completions", "chat", span -> "ok");
+      trace("chat gpt-4o");
     }
 
     SpanData span = spanExporter.getFinishedSpanItems().get(0);
@@ -233,11 +240,12 @@ public class OpenAITelemetryTest {
 
     telemetry.trace(
         "outer",
-        "chat",
-        outer -> {
+        Collections.<String, Object>emptyMap(),
+        () -> {
           rootInside.set(Context.current().get(StatsigTraceConventions.CTX_GEN_AI_ROOT));
-          return telemetry.trace("inner", "chat", inner -> "ok");
-        });
+          return trace("inner");
+        },
+        result -> Collections.<String, Object>emptyMap());
 
     assertEquals("outer", rootInside.get());
     // The context outside the call is unchanged.
@@ -253,18 +261,143 @@ public class OpenAITelemetryTest {
     assertEquals(spans.get("outer").getSpanId(), spans.get("inner").getParentSpanId());
   }
 
-  private OpenAITelemetry newTelemetry() {
-    return new OpenAITelemetry(
-        null,
+  @Test
+  public void spanHasTheRequestAndResultAttributesAndTimeToFirstToken() throws Throwable {
+    Map<String, Object> request = new LinkedHashMap<String, Object>();
+    request.put("gen_ai.request.model", "gpt-4o");
+    request.put("gen_ai.request.stop_sequences", Arrays.asList("END"));
+
+    String result =
+        telemetry.trace(
+            "chat gpt-4o",
+            request,
+            () -> "ok",
+            value -> Collections.singletonMap("gen_ai.response.id", "resp-" + value));
+
+    assertEquals("ok", result);
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals("chat gpt-4o", span.getName());
+    assertEquals(SpanKind.CLIENT, span.getKind());
+    assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
+    assertEquals("gen_ai", span.getAttributes().get(AttributeKey.stringKey("statsig.span.type")));
+    assertEquals(
+        "gpt-4o", span.getAttributes().get(AttributeKey.stringKey("gen_ai.request.model")));
+    assertEquals("resp-ok", span.getAttributes().get(AttributeKey.stringKey("gen_ai.response.id")));
+    // Lists are recorded as JSON, with their length, as in Node.
+    assertEquals(
+        "[\"END\"]",
+        span.getAttributes().get(AttributeKey.stringKey("gen_ai.request.stop_sequences")));
+    assertEquals(
+        Long.valueOf(7),
+        span.getAttributes().get(AttributeKey.longKey("gen_ai.request.stop_sequences_len")));
+    assertNotNull(
+        span.getAttributes()
+            .get(AttributeKey.longKey("statsig.gen_ai.server.time_to_first_token_ms")));
+    assertNull(
+        span.getAttributes().get(AttributeKey.doubleKey("gen_ai.server.time_to_first_token")));
+
+    Map<String, String> metadata = events.get(0);
+    assertEquals("chat gpt-4o", metadata.get("span.name"));
+    assertEquals("[\"END\"]", metadata.get("gen_ai.request.stop_sequences"));
+    assertEquals("7", metadata.get("gen_ai.request.stop_sequences_len"));
+    assertEquals("OK", metadata.get("span.status_code"));
+    assertNotNull(metadata.get("statsig.gen_ai.server.time_to_first_token_ms"));
+    assertTrue(Long.parseLong(metadata.get("duration")) >= 0);
+  }
+
+  @Test
+  public void customAttributesAreSetAndTheWrapperAttributesWin() throws Throwable {
+    Map<String, Object> custom = new LinkedHashMap<String, Object>();
+    custom.put("app.team", "support");
+    custom.put("gen_ai.request.model", "custom-model");
+    custom.put("statsig.span.type", "custom");
+    telemetry = newTelemetry(OpenAIWrapperConfig.builder().setCustomAttributes(custom).build());
+
+    telemetry.trace(
+        "chat gpt-4o",
+        Collections.singletonMap("gen_ai.request.model", "gpt-4o"),
+        () -> "ok",
+        value -> Collections.<String, Object>emptyMap());
+
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals("support", span.getAttributes().get(AttributeKey.stringKey("app.team")));
+    assertEquals(
+        "gpt-4o", span.getAttributes().get(AttributeKey.stringKey("gen_ai.request.model")));
+    assertEquals("gen_ai", span.getAttributes().get(AttributeKey.stringKey("statsig.span.type")));
+    assertEquals("support", events.get(0).get("app.team"));
+    assertEquals("gpt-4o", events.get(0).get("gen_ai.request.model"));
+  }
+
+  @Test
+  public void failedCallIsMarkedAsAnErrorAndRethrown() {
+    IllegalStateException error = new IllegalStateException("rate limited");
+    try {
+      telemetry.trace(
+          "chat gpt-4o",
+          Collections.<String, Object>emptyMap(),
+          () -> {
+            throw error;
+          },
+          value -> Collections.<String, Object>emptyMap());
+      fail("expected the call's exception");
+    } catch (Throwable t) {
+      assertSame(error, t);
+    }
+
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+    assertEquals("rate limited", span.getStatus().getDescription());
+    assertNull(
+        span.getAttributes()
+            .get(AttributeKey.longKey("statsig.gen_ai.server.time_to_first_token_ms")));
+    Map<String, String> metadata = events.get(0);
+    assertEquals("ERROR", metadata.get("span.status_code"));
+    assertEquals(IllegalStateException.class.getName(), metadata.get("exception.type"));
+    assertEquals("rate limited", metadata.get("exception.message"));
+  }
+
+  @Test
+  public void resultAttributesThatFailDoNotHideTheResult() throws Throwable {
+    String result =
+        telemetry.trace(
+            "chat gpt-4o",
+            Collections.<String, Object>emptyMap(),
+            () -> "ok",
+            value -> {
+              throw new IllegalArgumentException("unexpected response");
+            });
+
+    assertEquals("ok", result);
+    SpanData span = spanExporter.getFinishedSpanItems().get(0);
+    assertEquals(StatusCode.OK, span.getStatus().getStatusCode());
+    assertEquals(1, events.size());
+  }
+
+  private GenAITelemetry newTelemetry() {
+    return newTelemetry(null);
+  }
+
+  private GenAITelemetry newTelemetry(OpenAIWrapperConfig config) {
+    return new GenAITelemetry(
+        "test",
+        config,
         (user, name, metadata) -> {
           eventUsers.add(user);
           events.add(metadata);
         });
   }
 
+  private String trace(String name) throws Throwable {
+    return telemetry.trace(
+        name,
+        Collections.<String, Object>emptyMap(),
+        () -> "ok",
+        result -> Collections.<String, Object>emptyMap());
+  }
+
   private void traceOrFail(String name) {
     try {
-      telemetry.trace(name, "chat", span -> "ok");
+      trace(name);
     } catch (Throwable t) {
       throw new AssertionError(t);
     }

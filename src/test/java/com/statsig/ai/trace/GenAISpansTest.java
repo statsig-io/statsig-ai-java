@@ -79,7 +79,8 @@ public class GenAISpansTest {
       AttributeKey.stringKey("statsig.llm.prompt_version");
   private static final AttributeKey<String> PROMPT_VERSION_ID =
       AttributeKey.stringKey("statsig.llm.prompt_version_id");
-  private static final String MODEL_SPAN = "openai.chat.completions";
+  // The mocked params have no request body, so no model.
+  private static final String MODEL_SPAN = "chat unknown";
 
   private InMemorySpanExporter exporter;
   private SdkTracerProvider tracerProvider;

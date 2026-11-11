@@ -1,7 +1,9 @@
 package com.statsig.ai.instrumentation.openai;
 
 import com.openai.client.OpenAIClient;
+import com.statsig.ai.instrumentation.GenAITelemetry;
 import com.statsig.ai.instrumentation.openai.handlers.ClientHandler;
+import com.statsig.ai.instrumentation.openai.telemetry.OpenAIAttributes;
 import java.lang.reflect.Proxy;
 import java.util.Objects;
 
@@ -13,7 +15,7 @@ public final class OpenAIWrapper {
    * content.
    */
   public static OpenAIClient wrap(OpenAIClient client) {
-    return wrap(client, null);
+    return wrap(client, (OpenAIWrapperConfig) null);
   }
 
   /**
@@ -25,11 +27,16 @@ public final class OpenAIWrapper {
    */
   public static OpenAIClient wrap(OpenAIClient client, OpenAIWrapperConfig config) {
     Objects.requireNonNull(client, "client");
-    OpenAIWrapperConfig resolved = config == null ? OpenAIWrapperConfig.builder().build() : config;
+    return wrap(client, new GenAITelemetry(OpenAIAttributes.INSTRUMENTATION_NAME, config));
+  }
+
+  // Tests pass a GenAITelemetry that reads the statsig::gen_ai events.
+  static OpenAIClient wrap(OpenAIClient client, GenAITelemetry telemetry) {
+    Objects.requireNonNull(client, "client");
     return (OpenAIClient)
         Proxy.newProxyInstance(
             client.getClass().getClassLoader(),
             new Class<?>[] {OpenAIClient.class},
-            new ClientHandler(client, resolved));
+            new ClientHandler(client, telemetry));
   }
 }
