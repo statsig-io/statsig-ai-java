@@ -31,6 +31,8 @@ public final class StatsigTraceConventions {
       ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT_VERSION");
   public static final ContextKey<UserContext> CTX_ACTIVE_USER =
       ContextKey.named("STATSIG_CTX_ACTIVE_USER");
+  public static final ContextKey<StatsigContextItem> CTX_ACTIVE_CONTEXT =
+      ContextKey.named("STATSIG_CTX_ACTIVE_CONTEXT");
   public static final ContextKey<String> CTX_GEN_AI_ROOT =
       ContextKey.named("STATSIG_CTX_GEN_AI_ROOT");
 }
