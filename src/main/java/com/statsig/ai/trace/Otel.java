@@ -6,8 +6,7 @@ import com.statsig.ai.trace.singleton.OtelSingleton;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.SpanProcessor;
-import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
 
 /**
@@ -19,13 +18,7 @@ public class Otel {
     StatsigOTLPTraceExporterOptions exporterOptions = options.getExporterOptions();
     StatsigOTLPTraceExporter exporter = new StatsigOTLPTraceExporter(exporterOptions);
 
-    SpanProcessor spanProcessor = BatchSpanProcessor.builder(exporter).build();
-
-    SdkTracerProvider tracerProvider =
-        SdkTracerProvider.builder()
-            .addSpanProcessor(spanProcessor)
-            .setSampler(Sampler.alwaysOn())
-            .build();
+    SdkTracerProvider tracerProvider = buildTracerProvider(exporter);
 
     // Save to singleton for global lookup
     OtelSingleton.instantiate(tracerProvider);
@@ -38,5 +31,12 @@ public class Otel {
         "[Statsig OTEL] Initialized with exporter: " + exporterOptions.getEndpoint());
 
     return openTelemetry;
+  }
+
+  static SdkTracerProvider buildTracerProvider(SpanExporter exporter) {
+    return SdkTracerProvider.builder()
+        .addSpanProcessor(new StatsigSpanProcessor(exporter))
+        .setSampler(Sampler.alwaysOn())
+        .build();
   }
 }

@@ -29,6 +29,15 @@ public final class StatsigContextUtils {
     return ctx;
   }
 
+  // ----------------------------------------------------------------------
+  // User context
+  // ----------------------------------------------------------------------
+
+  /**
+   * Returns {@code ctx} with the user's IDs. {@link StatsigSpanProcessor} stamps spans started in
+   * it with {@code statsig.user_id} and {@code statsig.custom_ids}. Returns {@code ctx} unchanged
+   * when {@code user} is null.
+   */
   public static Context withUser(Context ctx, StatsigUser user) {
     if (user == null) {
       return ctx;
@@ -36,8 +45,43 @@ public final class StatsigContextUtils {
     return ctx.with(StatsigTraceConventions.CTX_ACTIVE_USER, toUserContext(user));
   }
 
+  /**
+   * Runs {@code body} with the user's IDs in context, and returns its result. See {@link
+   * #withUser(Context, StatsigUser)}.
+   */
+  public static <T> T withStatsigUserContext(StatsigUser user, Supplier<T> body) {
+    Objects.requireNonNull(body, "body");
+    return callIn(withUser(Context.current(), user), body);
+  }
+
+  /**
+   * Runs {@code body} with the user's IDs in context. See {@link #withUser(Context, StatsigUser)}.
+   */
+  public static void withStatsigUserContext(StatsigUser user, Runnable body) {
+    Objects.requireNonNull(body, "body");
+    runIn(withUser(Context.current(), user), body);
+  }
+
   public static UserContext getActiveUser(Context ctx) {
     return ctx.get(StatsigTraceConventions.CTX_ACTIVE_USER);
+  }
+
+  /**
+   * Returns the span attributes for the user in {@code ctx}: {@code statsig.user_id}, and {@code
+   * statsig.custom_ids} (compact JSON) when the user has custom IDs. Returns an empty map when
+   * there's no user.
+   */
+  public static Map<String, String> getUserSpanAttrs(Context ctx) {
+    UserContext user = getActiveUser(ctx);
+    if (user == null) {
+      return Collections.emptyMap();
+    }
+    Map<String, String> attrs = new LinkedHashMap<String, String>();
+    attrs.put(StatsigTraceConventions.ATTR_USER_ID, user.getUserID());
+    if (!user.getCustomIDs().isEmpty()) {
+      attrs.put(StatsigTraceConventions.ATTR_CUSTOM_IDS, toJson(user.getCustomIDs()));
+    }
+    return Collections.unmodifiableMap(attrs);
   }
 
   // ----------------------------------------------------------------------
