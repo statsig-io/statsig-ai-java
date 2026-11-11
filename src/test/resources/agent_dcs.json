@@ -1,0 +1,165 @@
+{
+  "dynamic_configs": {
+    "agent_dag:live-dag": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000001",
+      "enabled": true,
+      "defaultValue": {
+        "root": "prompt:live-root"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    },
+    "agent_dag:candidate-dag-1": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000002",
+      "enabled": true,
+      "defaultValue": {
+        "root": "prompt:candidate-root-1"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    },
+    "agent_dag:candidate-dag-2": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000003",
+      "enabled": true,
+      "defaultValue": {
+        "root": "prompt:candidate-root-2"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    },
+    "prompt:live-root": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000004",
+      "enabled": true,
+      "defaultValue": {
+        "name": "Live Root",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "temperature": 0.2,
+        "maxTokens": 500,
+        "aiConfigName": "support_agent_root",
+        "type": "prompt"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    },
+    "prompt:candidate-root-1": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000005",
+      "enabled": true,
+      "defaultValue": {
+        "name": "Candidate Root 1",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "temperature": 0.2,
+        "maxTokens": 500,
+        "aiConfigName": "support_agent_root",
+        "type": "prompt"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    },
+    "prompt:candidate-root-2": {
+      "type": "dynamic_config",
+      "salt": "a1f0b2c3-0001-4000-8000-000000000006",
+      "enabled": true,
+      "defaultValue": {
+        "name": "Candidate Root 2",
+        "provider": "openai",
+        "model": "gpt-4.1",
+        "temperature": 0.2,
+        "maxTokens": 500,
+        "aiConfigName": "support_agent_root",
+        "type": "prompt"
+      },
+      "rules": [],
+      "idType": "userID",
+      "entity": "dynamic_config",
+      "version": 1
+    }
+  },
+  "feature_gates": {},
+  "experiment_to_layer": {},
+  "layer_configs": {},
+  "has_updates": true,
+  "time": 1761344441427,
+  "company_id": "4YuaNK3ALJ4uCgz6P2oEPs",
+  "condition_map": {},
+  "response_format": "dcs-v2",
+  "param_stores": {
+    "agent:support_agent": {
+      "parameters": {
+        "live": {
+          "name": "live",
+          "param_type": "string",
+          "ref_type": "static",
+          "value": "agent_dag:live-dag"
+        },
+        "candidates": {
+          "name": "candidates",
+          "param_type": "array",
+          "ref_type": "static",
+          "value": [
+            "agent_dag:candidate-dag-1",
+            "agent_dag:candidate-dag-2"
+          ]
+        }
+      },
+      "targetAppIDs": [],
+      "version": 1
+    },
+    "agent:empty_agent": {
+      "parameters": {
+        "live": {
+          "name": "live",
+          "param_type": "string",
+          "ref_type": "static",
+          "value": ""
+        },
+        "candidates": {
+          "name": "candidates",
+          "param_type": "array",
+          "ref_type": "static",
+          "value": []
+        }
+      },
+      "targetAppIDs": [],
+      "version": 1
+    }
+  },
+  "session_replay_info": {
+    "sampling_rate": 1,
+    "recording_blocked": false
+  },
+  "id_lists": {},
+  "diagnostics": {
+    "initialize": 10000,
+    "dcs": 1000,
+    "download_config_specs": 1000,
+    "idlist": 100,
+    "get_id_list": 100,
+    "get_id_list_sources": 100,
+    "log": 100,
+    "log_event": 100,
+    "api_call": 100
+  },
+  "sdk_configs": {
+    "event_queue_size": 2000,
+    "event_content_encoding": "gzip",
+    "sampling_mode": "none"
+  },
+  "checksum": "7455383234386657000"
+}
