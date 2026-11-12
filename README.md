@@ -48,7 +48,7 @@ ai.logEvalGrade(
 
 ## Instrumentation (early preview)
 
-The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span.
+The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span. Spans have the same names and attributes as the Node SDK's: the span is named `<operation> <model>`, such as `chat gpt-4o`, with `gen_ai.operation.name`, `gen_ai.provider.name`, the request settings, token usage, and `statsig.gen_ai.server.time_to_first_token_ms`. Messages use the [OpenTelemetry GenAI format](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/), `{role, parts}`.
 
 ```java
 import com.openai.client.OpenAIClient;
@@ -67,7 +67,7 @@ Messages usually hold user input and model output, so by default spans don't rec
 | --- | --- |
 | `captureInputMessages` | `gen_ai.input.messages` |
 | `captureOutputMessages` | `gen_ai.output.messages` |
-| `captureSystemInstructions` | `gen_ai.system.instructions` |
+| `captureSystemInstructions` | `gen_ai.system_instructions` |
 | `captureToolDefinitions` | `gen_ai.tool.definitions` |
 | `captureAll` | all four |
 
@@ -89,7 +89,7 @@ OpenAIClient wrapped =
             .build());
 ```
 
-`setCustomAttributes` adds your own attributes to every model call span; the wrapper's attributes win when a key is the same. JSON attributes, such as the messages, are truncated after `setMaxJsonChars` characters (40,000 by default). A truncated attribute gets `<key>_len` with its full length.
+`setCustomAttributes` adds your own attributes to every model call span; the wrapper's attributes win when a key is the same. JSON attributes, such as the messages, are truncated after `setMaxJsonChars` characters (40,000 by default), and `<key>_len` records each one's full length.
 
 ### Tagging calls with a prompt version
 

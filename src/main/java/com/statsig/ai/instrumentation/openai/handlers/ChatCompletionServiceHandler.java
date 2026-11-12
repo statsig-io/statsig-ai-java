@@ -2,35 +2,32 @@ package com.statsig.ai.instrumentation.openai.handlers;
 
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.services.blocking.chat.ChatCompletionService;
-import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
-import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
+import com.statsig.ai.instrumentation.GenAITelemetry;
 import com.statsig.ai.instrumentation.openai.ReflectionUtils;
 import com.statsig.ai.instrumentation.openai.telemetry.OpenAIAttributes;
-import com.statsig.ai.instrumentation.openai.telemetry.OpenAITelemetry;
-import com.statsig.ai.trace.StatsigTraceConventions;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Map;
 
 public final class ChatCompletionServiceHandler implements InvocationHandler {
+  private static final String SOURCE_NAME = "openai.chat.completions.create";
 
   private final ChatCompletionService delegate;
-  private final GenAICaptureOptions captureOptions;
-  private final OpenAITelemetry telemetry;
+  private final GenAITelemetry telemetry;
 
-  private ChatCompletionServiceHandler(ChatCompletionService delegate, OpenAIWrapperConfig config) {
+  private ChatCompletionServiceHandler(ChatCompletionService delegate, GenAITelemetry telemetry) {
     this.delegate = delegate;
-    this.captureOptions = config.getCaptureOptions();
-    this.telemetry = new OpenAITelemetry(config);
+    this.telemetry = telemetry;
   }
 
   public static ChatCompletionService wrap(
-      ChatCompletionService delegate, OpenAIWrapperConfig config) {
+      ChatCompletionService delegate, GenAITelemetry telemetry) {
     return (ChatCompletionService)
         Proxy.newProxyInstance(
             delegate.getClass().getClassLoader(),
             new Class<?>[] {ChatCompletionService.class},
-            new ChatCompletionServiceHandler(delegate, config));
+            new ChatCompletionServiceHandler(delegate, telemetry));
   }
 
   @Override
@@ -42,17 +39,14 @@ public final class ChatCompletionServiceHandler implements InvocationHandler {
       return method.invoke(delegate, args);
     }
 
-    ChatCompletionCreateParams params = (ChatCompletionCreateParams) args[0];
+    Map<String, Object> params = OpenAIAttributes.toPlainRequest(args[0]);
 
     return telemetry.trace(
-        "openai.chat.completions",
-        StatsigTraceConventions.GEN_AI_SPAN_TYPE_CHAT,
-        span -> {
-          OpenAIAttributes.applyRequestAttributes(span, "chat.completions", params, captureOptions);
-          Object response = ReflectionUtils.delegateInvoke(method, delegate, args);
-          OpenAIAttributes.applyResponseAttributes(span, response, captureOptions);
-          OpenAIAttributes.applyUsageAttributes(span, response);
-          return response;
-        });
+        OpenAIAttributes.spanName(SOURCE_NAME, params),
+        OpenAIAttributes.requestAttributes(SOURCE_NAME, params, telemetry.getCaptureOptions()),
+        () -> ReflectionUtils.delegateInvoke(method, delegate, args),
+        response ->
+            OpenAIAttributes.responseAttributes(
+                OpenAIAttributes.toPlainMap(response), telemetry.getCaptureOptions()));
   }
 }

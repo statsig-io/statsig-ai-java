@@ -38,7 +38,7 @@ public class OpenAIWrapperCaptureTest {
   private static final AttributeKey<String> OUTPUT_MESSAGES =
       AttributeKey.stringKey("gen_ai.output.messages");
   private static final AttributeKey<String> SYSTEM_INSTRUCTIONS =
-      AttributeKey.stringKey("gen_ai.system.instructions");
+      AttributeKey.stringKey("gen_ai.system_instructions");
   private static final AttributeKey<String> TOOL_DEFINITIONS =
       AttributeKey.stringKey("gen_ai.tool.definitions");
 
@@ -74,9 +74,7 @@ public class OpenAIWrapperCaptureTest {
     // Attributes without message content are still recorded.
     assertEquals("gpt-4o-mini", attrs.get(AttributeKey.stringKey("gen_ai.request.model")));
     assertEquals("chatcmpl-1", attrs.get(AttributeKey.stringKey("gen_ai.response.id")));
-    assertEquals(
-        Arrays.asList("stop"),
-        attrs.get(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons")));
+    assertEquals("[\"stop\"]", attrs.get(AttributeKey.stringKey("gen_ai.response.finish_reasons")));
     assertEquals(Long.valueOf(12), attrs.get(AttributeKey.longKey("gen_ai.usage.input_tokens")));
   }
 
@@ -208,7 +206,7 @@ public class OpenAIWrapperCaptureTest {
     assertEquals("support", attrs.get(AttributeKey.stringKey("app.team")));
     assertEquals(Long.valueOf(3), attrs.get(AttributeKey.longKey("app.shard")));
     assertEquals(Boolean.TRUE, attrs.get(AttributeKey.booleanKey("app.beta")));
-    assertEquals(Arrays.asList("us", "eu"), attrs.get(AttributeKey.stringArrayKey("app.regions")));
+    assertEquals("[\"us\",\"eu\"]", attrs.get(AttributeKey.stringKey("app.regions")));
     assertEquals("gpt-4o-mini", attrs.get(AttributeKey.stringKey("gen_ai.request.model")));
   }
 

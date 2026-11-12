@@ -2,17 +2,17 @@ package com.statsig.ai.instrumentation.openai.handlers;
 
 import com.openai.client.OpenAIClient;
 import com.openai.services.blocking.ChatService;
-import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
+import com.statsig.ai.instrumentation.GenAITelemetry;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 
 public final class ClientHandler implements InvocationHandler {
   private final OpenAIClient delegate;
-  private final OpenAIWrapperConfig config;
+  private final GenAITelemetry telemetry;
 
-  public ClientHandler(OpenAIClient delegate, OpenAIWrapperConfig config) {
+  public ClientHandler(OpenAIClient delegate, GenAITelemetry telemetry) {
     this.delegate = delegate;
-    this.config = config;
+    this.telemetry = telemetry;
   }
 
   @Override
@@ -24,7 +24,7 @@ public final class ClientHandler implements InvocationHandler {
 
     if ("chat".equals(method.getName())) {
       ChatService service = (ChatService) method.invoke(delegate, args);
-      return ChatServiceHandler.wrap(service, config);
+      return ChatServiceHandler.wrap(service, telemetry);
     }
 
     return method.invoke(delegate, args);
