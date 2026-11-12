@@ -14,6 +14,8 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 /**
  * Starts and ends model call spans for the provider wrappers, like {@code startGenAISpan} and
@@ -115,6 +117,51 @@ public final class GenAITelemetry {
     span.setAttributesSafely(() -> onResult.attributes(value));
     span.end();
     return value;
+  }
+
+  /**
+   * Runs an async provider call in a model call span, and returns a future that completes with the
+   * call's result or exception after the span has ended, so a caller can {@code join()} it and then
+   * flush. The span ends like {@link #trace}'s when the call's future completes.
+   */
+  public <T> CompletableFuture<T> traceAsync(
+      String spanName,
+      Map<String, ?> requestAttributes,
+      ProviderCall<CompletableFuture<T>> call,
+      ResultAttributes<T> onResult)
+      throws Throwable {
+    GenAISpan span = startSpan(spanName, requestAttributes);
+    CompletableFuture<T> future;
+    try (Scope ignored = span.getContext().makeCurrent()) {
+      future = call.call();
+    } catch (Throwable t) {
+      span.fail(t);
+      span.end();
+      throw t;
+    }
+    if (future == null) {
+      span.end();
+      return null;
+    }
+    return future.whenComplete(
+        (value, error) -> {
+          if (error != null) {
+            span.fail(unwrap(error));
+          } else {
+            span.recordTimeToFirstToken();
+            span.getTelemetry().setStatus(StatusCode.OK);
+            span.setAttributesSafely(() -> onResult.attributes(value));
+          }
+          span.end();
+        });
+  }
+
+  // A stage that fails because an earlier stage failed reports a CompletionException.
+  private static Throwable unwrap(Throwable error) {
+    if (error instanceof CompletionException && error.getCause() != null) {
+      return error.getCause();
+    }
+    return error;
   }
 
   @FunctionalInterface
