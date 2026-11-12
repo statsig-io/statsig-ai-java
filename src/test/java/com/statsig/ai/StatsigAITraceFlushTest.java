@@ -67,8 +67,18 @@ public class StatsigAITraceFlushTest {
 
     // The provider is still usable after the AI instance shuts down.
     tracerProvider.get("flush-test").spanBuilder("after-shutdown").startSpan().end();
-    tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
+    flushUntilExported(2);
     assertEquals(2, spanExporter.getFinishedSpanItems().size());
+  }
+
+  // BatchSpanProcessor completes a flush before clearing it, so a forceFlush made just after
+  // another one can return that finished flush without exporting anything. Flush again until the
+  // spans arrive.
+  private void flushUntilExported(int count) {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (spanExporter.getFinishedSpanItems().size() < count && System.nanoTime() < deadline) {
+      tracerProvider.forceFlush().join(1, TimeUnit.SECONDS);
+    }
   }
 
   private static void resetOtelSingleton() throws Exception {

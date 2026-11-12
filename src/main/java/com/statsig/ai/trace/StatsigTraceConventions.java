@@ -31,6 +31,11 @@ public final class StatsigTraceConventions {
   // Incubating in the OpenTelemetry semantic conventions, so copied here.
   public static final String ATTR_DEPLOYMENT_ENVIRONMENT_NAME = "deployment.environment.name";
 
+  public static final String ATTR_EVAL_NAME = "statsig.eval.name";
+  public static final String ATTR_EVAL_RUN_NAME = "statsig.eval.run_name";
+  public static final String ATTR_EVAL_RECORD_INDEX = "statsig.eval.record_index";
+  public static final String ATTR_EVAL_SCORER_NAME = "statsig.eval.scorer_name";
+
   public static final ContextKey<String> CTX_ACTIVE_PROMPT =
       ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT");
   public static final ContextKey<String> CTX_ACTIVE_PROMPT_VERSION =

@@ -37,16 +37,23 @@ final class EvalResultsSender {
     final Object output;
     final boolean error;
     final Map<String, ScoreWithMetadata> scores;
+    // The record's trace and root span. Null when tracing isn't initialized.
+    final String traceID;
+    final String spanID;
 
     SentRecord(
         EvalDataRecord<?, ?> record,
         Object output,
         boolean error,
-        Map<String, ScoreWithMetadata> scores) {
+        Map<String, ScoreWithMetadata> scores,
+        String traceID,
+        String spanID) {
       this.record = record;
       this.output = output;
       this.error = error;
       this.scores = scores;
+      this.traceID = traceID;
+      this.spanID = spanID;
     }
   }
 
@@ -140,6 +147,12 @@ final class EvalResultsSender {
     }
     if (record.getCategoryAsGiven() != null) {
       result.put("category", record.getCategoryAsGiven());
+    }
+    if (sent.traceID != null) {
+      result.put("traceID", sent.traceID);
+    }
+    if (sent.spanID != null) {
+      result.put("spanID", sent.spanID);
     }
     result.put("error", sent.error);
     Map<String, Object> scores = new LinkedHashMap<>();
