@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
 import com.statsig.ai.trace.SpanTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
@@ -47,7 +48,11 @@ public class OpenAIAttributesTest {
             SpanTelemetry.SpanEventLogger.noop());
 
     FakeParams params = new FakeParams();
-    OpenAIAttributes.applyRequestAttributes(telemetry, "chat.completions", params);
+    OpenAIAttributes.applyRequestAttributes(
+        telemetry,
+        "chat.completions",
+        params,
+        GenAICaptureOptions.builder().captureAll(true).build());
     telemetry.end();
 
     SpanData data = exporter.getFinishedSpanItems().get(0);
@@ -76,7 +81,8 @@ public class OpenAIAttributesTest {
             SpanTelemetry.SpanEventLogger.noop());
 
     FakeResponse response = new FakeResponse();
-    OpenAIAttributes.applyResponseAttributes(telemetry, response);
+    OpenAIAttributes.applyResponseAttributes(
+        telemetry, response, GenAICaptureOptions.builder().build());
     OpenAIAttributes.applyUsageAttributes(telemetry, response);
     telemetry.end();
 

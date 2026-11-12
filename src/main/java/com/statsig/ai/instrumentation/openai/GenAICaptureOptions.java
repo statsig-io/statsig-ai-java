@@ -1,6 +1,17 @@
 package com.statsig.ai.instrumentation.openai;
 
-/** Controls which OpenAI request/response fields should be captured on spans. */
+/**
+ * Controls which message content model call spans capture. Messages usually hold user input and
+ * model output, so by default none is captured.
+ *
+ * <ul>
+ *   <li>{@code captureInputMessages}: {@code gen_ai.input.messages}
+ *   <li>{@code captureOutputMessages}: {@code gen_ai.output.messages}
+ *   <li>{@code captureSystemInstructions}: the system instructions
+ *   <li>{@code captureToolDefinitions}: {@code gen_ai.tool.definitions}
+ *   <li>{@code captureAll}: all four
+ * </ul>
+ */
 public final class GenAICaptureOptions {
   private final boolean captureAll;
   private final boolean captureInputMessages;
