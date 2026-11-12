@@ -9,13 +9,22 @@ public final class EvalResultRecord<I, O, E> {
   private final O output;
   private final boolean error;
   private final Map<String, Double> scores;
+  private final String traceID;
+  private final String spanID;
 
   EvalResultRecord(
-      EvalDataRecord<I, E> record, O output, boolean error, Map<String, Double> scores) {
+      EvalDataRecord<I, E> record,
+      O output,
+      boolean error,
+      Map<String, Double> scores,
+      String traceID,
+      String spanID) {
     this.record = record;
     this.output = output;
     this.error = error;
     this.scores = scores;
+    this.traceID = traceID;
+    this.spanID = spanID;
   }
 
   public I getInput() {
@@ -53,5 +62,18 @@ public final class EvalResultRecord<I, O, E> {
   /** Each scorer's score, by scorer name, in the order the scorers were added. */
   public Map<String, Double> getScores() {
     return scores;
+  }
+
+  /** The ID of the record's own trace. Null when tracing isn't initialized. */
+  public String getTraceID() {
+    return traceID;
+  }
+
+  /**
+   * The ID of the record's root span, which the task's and scorers' spans are under. Null when
+   * tracing isn't initialized.
+   */
+  public String getSpanID() {
+    return spanID;
   }
 }

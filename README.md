@@ -426,6 +426,30 @@ for (EvalResultRecord<String, String, String> record : result.getResults()) {
 - `summaryScores(results -> ...)` adds run-level scores, such as a pass rate.
 - Inputs, outputs, expected values, parameters and metadata values that aren't strings are sent as JSON. If the results can't be sent, `run()` logs a warning and still returns them.
 
+### Eval traces
+
+Tasks and scorers run with the Statsig environment `eval`, so spans started inside them, such as model calls through `OpenAIWrapper`, get `statsig.environment=eval` and stay out of your production traces. This holds whether or not tracing is on.
+
+When tracing is initialized with `Otel.initialize`, each record also gets its own trace:
+
+- The root is a workflow span named after the eval, marked `statsig.span.llm_root=1`, with `statsig.eval.name`, `statsig.eval.record_index` and, when set, `statsig.eval.run_name`. It starts a new trace even when the eval runs inside another span, and ends when the record's task and scorers are done. A task that throws marks it ERROR.
+- Model calls the task makes through `OpenAIWrapper` are its children.
+- Each scorer runs in a child workflow span named after the scorer, with `statsig.eval.scorer_name`.
+
+`getTraceID()` and `getSpanID()` on each `EvalResultRecord` return the record's trace and root span, and are sent to Statsig with the scores. Without tracing they're null. The eval flushes the spans before it sends the results, waiting up to 30 seconds. If the flush fails or times out, it logs a warning and sends the results anyway.
+
+If an async task hands work to threads of its own, pass the context along so that work joins the record's trace, for example with `Context.current().wrap(executor)`:
+
+```java
+import io.opentelemetry.context.Context;
+
+Eval.builder("trivia_bot", data)
+    .asyncTask(
+        (input, hooks) ->
+            CompletableFuture.supplyAsync(
+                () -> askModel(input), Context.current().wrap(modelExecutor)))
+```
+
 ## Running evals on a Statsig dataset
 
 Pass `StatsigDataset.of(name, toRecord)` to `Eval.builder(...)` to run on an eval dataset from the console. `toRecord` says which columns hold the input and the expected value. The run names the dataset and each result keeps its dataset row ID, so the Eval page compares runs on the dataset row by row.
