@@ -29,4 +29,9 @@ public final class EvalScorerArgs<I, O, E> {
   public List<String> getCategories() {
     return record.getCategories();
   }
+
+  /** The ID of the record's row in the eval's dataset, or null when it has none. */
+  public String getRowID() {
+    return record.getRowID();
+  }
 }

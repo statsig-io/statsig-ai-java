@@ -19,6 +19,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,7 +29,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,6 +48,7 @@ import org.junit.Test;
 public class EvalTest {
   private static final String API_KEY = "test-console-api-key";
   private static final String SEND_RESULTS_PATH = "/console/v1/evals/send_results";
+  private static final String DATASETS_PATH = "/console/v1/eval_datasets";
   private static final ObjectMapper JSON = new ObjectMapper();
 
   private MockScrapiServer scrapi;
@@ -1109,12 +1113,394 @@ public class EvalTest {
             .apiKey(API_KEY)
             .build();
 
+    Eval<String, String, String> onDataset =
+        Eval.builder(
+                "test task",
+                StatsigDataset.of(
+                    "golden",
+                    row ->
+                        EvalDataRecord.of(
+                            row.getColumns().get("question"),
+                            row.getColumns().get("answer"),
+                            row.getGroups())))
+            .task((input, hooks) -> "Hello " + input)
+            .scorer(args -> args.getOutput().equals(args.getExpected()))
+            .dataset("golden v2")
+            .apiKey(API_KEY)
+            .build();
+
     assertNotNull(async);
     assertNotNull(fromIterable);
+    assertNotNull(onDataset);
     EvalResult<String, String, String> result = sync.run();
     assertEquals(9.0, result.getResults().get(0).getScores().get("Grader"), 0);
     assertEquals(Collections.singletonMap("count", 2.0), result.getSummaryScores());
     takeRequest();
+  }
+
+  @Test
+  public void loadsEveryPageOfADatasetAndSendsItsRowIDs() throws Exception {
+    enqueueDatasetPage(0, 100);
+    enqueueDatasetPage(100, 200);
+    enqueueDatasetPage(200, 201);
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("dataset eval", goldenSet())
+                    .task((input, hooks) -> input.replace('q', 'a'))
+                    .scorer(args -> args.getOutput().equals(args.getExpected())))
+            .build()
+            .run();
+
+    assertEquals(201, result.getResults().size());
+    for (int page = 1; page <= 3; page++) {
+      RecordedRequest request = takeRequest();
+      assertEquals("GET", request.getMethod());
+      assertEquals(
+          DATASETS_PATH + "/golden%20set/rows?page=" + page + "&limit=100", request.getPath());
+      assertEquals(API_KEY, request.getHeader("STATSIG-API-KEY"));
+    }
+    for (int i = 0; i < 201; i++) {
+      EvalResultRecord<String, String, String> record = result.getResults().get(i);
+      assertEquals("row-" + i, record.getRowID());
+      assertEquals("q" + i, record.getInput());
+      assertEquals(1.0, record.getScores().get("Grader"), 0);
+    }
+
+    RecordedRequest send = takeRequest();
+    assertEquals(SEND_RESULTS_PATH + "/dataset%20eval", send.getPath());
+    JsonNode body = JSON.readTree(send.getBody().readUtf8());
+    assertEquals("golden set", body.get("dataset").asText());
+    assertEquals(
+        json(
+            "{'input':'q200','output':'a200','expected':'a200','category':['math'],"
+                + "'rowID':'row-200','error':false,'scores':{'Grader':{'score':1.0}}}"),
+        withoutLatency(body.get("results").get(200)));
+    assertEquals("row-0", body.get("results").get(0).get("rowID").asText());
+  }
+
+  @Test
+  public void mapsDatasetRowsToRecordsThatKeepTheRowsID() throws Exception {
+    scrapi.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .setBody(
+                json("{'data':["
+                        + "{'rowID':'row-a','columns':[{'name':'question','value':'qa'},"
+                        + "{'name':'answer','value':'aa'},{'name':'notes','value':'hard'}],"
+                        + "'groups':['math','easy']},"
+                        + "{'rowID':'row-b','columns':[{'name':'question','value':'qb'}]},"
+                        + "{'rowID':'row-c','columns':[{'name':'question','value':'qc'},"
+                        + "{'name':'answer','value':'ac'}],'groups':[]}]}")
+                    .toString()));
+    enqueueOk();
+    List<StatsigDatasetRow> rows = Collections.synchronizedList(new ArrayList<>());
+    StatsigDataset<String, String> dataset =
+        StatsigDataset.of(
+            "golden",
+            row -> {
+              rows.add(row);
+              EvalDataRecord<String, String> record =
+                  EvalDataRecord.of(
+                      row.getColumns().get("question"),
+                      row.getColumns().get("answer"),
+                      row.getGroups());
+              // The row's own ID wins over one toRecord sets.
+              return row.getRowID().equals("row-b") ? record.withRowID("caller-set") : record;
+            });
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("dataset eval", dataset)
+                    .task((input, hooks) -> input)
+                    .scorer("rowID", args -> args.getRowID().startsWith("row-")))
+            .build()
+            .run();
+
+    assertEquals(3, rows.size());
+    Map<String, String> columns = new LinkedHashMap<>();
+    columns.put("question", "qa");
+    columns.put("answer", "aa");
+    columns.put("notes", "hard");
+    assertEquals("row-a", rows.get(0).getRowID());
+    assertEquals(columns, rows.get(0).getColumns());
+    assertEquals(
+        Arrays.asList("question", "answer", "notes"),
+        new ArrayList<>(rows.get(0).getColumns().keySet()));
+    assertEquals(Arrays.asList("math", "easy"), rows.get(0).getGroups());
+    assertEquals(Collections.singletonMap("question", "qb"), rows.get(1).getColumns());
+    assertEquals(Collections.emptyList(), rows.get(1).getGroups());
+    assertEquals(Collections.emptyList(), rows.get(2).getGroups());
+
+    List<EvalResultRecord<String, String, String>> results = result.getResults();
+    assertEquals("row-a", results.get(0).getRowID());
+    assertEquals("row-b", results.get(1).getRowID());
+    assertEquals("row-c", results.get(2).getRowID());
+    assertEquals(Arrays.asList("math", "easy"), results.get(0).getCategories());
+    assertNull(results.get(1).getExpected());
+    for (EvalResultRecord<String, String, String> record : results) {
+      assertEquals(1.0, record.getScores().get("rowID"), 0);
+    }
+
+    takeRequest();
+    JsonNode sent = takeBody().get("results");
+    assertEquals("row-b", sent.get(1).get("rowID").asText());
+    assertEquals(json("['math','easy']"), sent.get(0).get("category"));
+  }
+
+  @Test
+  public void sendsTheDatasetOptionWithCallerBuiltRecords() throws Exception {
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder(
+                        "test task",
+                        Arrays.asList(
+                            EvalDataRecord.of("Foo", "Hello Foo").withRowID("row-1"),
+                            EvalDataRecord.of("Bar", "Hello Bar", "greeting").withRowID("row-2")))
+                    .task((input, hooks) -> "Hello " + input)
+                    .scorer(args -> args.getOutput().equals(args.getExpected())))
+            .dataset("golden")
+            .build()
+            .run();
+
+    assertEquals("row-1", result.getResults().get(0).getRowID());
+    assertEquals("row-2", result.getResults().get(1).getRowID());
+    RecordedRequest request = takeRequest();
+    assertEquals(SEND_RESULTS_PATH + "/test%20task", request.getPath());
+    JsonNode body = JSON.readTree(request.getBody().readUtf8());
+    assertEquals("golden", body.get("dataset").asText());
+    assertEquals(
+        json(
+            "{'input':'Foo','output':'Hello Foo','expected':'Hello Foo','rowID':'row-1',"
+                + "'error':false,'scores':{'Grader':{'score':1.0}}}"),
+        withoutLatency(body.get("results").get(0)));
+    assertEquals(
+        json(
+            "{'input':'Bar','output':'Hello Bar','expected':'Hello Bar','category':'greeting',"
+                + "'rowID':'row-2','error':false,'scores':{'Grader':{'score':1.0}}}"),
+        withoutLatency(body.get("results").get(1)));
+    assertEquals(1, scrapi.getServer().getRequestCount());
+  }
+
+  @Test
+  public void datasetOptionReplacesTheStatsigDatasetsName() throws Exception {
+    enqueueDatasetPage(0, 2);
+    enqueueOk();
+
+    local(Eval.builder("dataset eval", goldenSet()).task((input, hooks) -> input).scorer(args -> 1))
+        .dataset("golden v2")
+        .build()
+        .run();
+
+    assertEquals(DATASETS_PATH + "/golden%20set/rows?page=1&limit=100", takeRequest().getPath());
+    assertEquals("golden v2", takeBody().get("dataset").asText());
+  }
+
+  @Test
+  public void sendsRowIDsWithoutCheckingThemWhenNoDatasetIsNamed() throws Exception {
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder(
+                        "test task",
+                        Arrays.asList(
+                            EvalDataRecord.of("Foo", "Hello Foo").withRowID("row-0"),
+                            EvalDataRecord.of("Bar", "Hello Bar").withRowID("row-0"),
+                            EvalDataRecord.<String, String>of("Baz")))
+                    .task((input, hooks) -> "Hello " + input)
+                    .scorer(args -> 1))
+            .build()
+            .run();
+
+    assertEquals(3, result.getResults().size());
+    assertNull(result.getResults().get(2).getRowID());
+    JsonNode body = takeBody();
+    assertFalse(body.has("dataset"));
+    assertEquals("row-0", body.get("results").get(1).get("rowID").asText());
+    assertFalse(body.get("results").get(2).has("rowID"));
+  }
+
+  @Test
+  public void checksRowIDsBeforeAnyTaskRunsWhenTheEvalNamesADataset() throws Exception {
+    Map<String, List<EvalDataRecord<String, String>>> cases = new LinkedHashMap<>();
+    cases.put(
+        "[StatsigAI] data[1] needs a rowID when the eval names a dataset.",
+        Arrays.asList(
+            EvalDataRecord.<String, String>of("q0").withRowID("row-0"),
+            EvalDataRecord.<String, String>of("q1")));
+    cases.put(
+        "[StatsigAI] data[0] needs a rowID when the eval names a dataset.",
+        Arrays.asList(EvalDataRecord.<String, String>of("q0").withRowID("")));
+    cases.put(
+        "[StatsigAI] data[1] repeats rowID row-0; each record needs its own dataset row.",
+        Arrays.asList(
+            EvalDataRecord.<String, String>of("q0").withRowID("row-0"),
+            EvalDataRecord.<String, String>of("q1").withRowID("row-0")));
+    AtomicInteger taskCalls = new AtomicInteger();
+
+    for (Map.Entry<String, List<EvalDataRecord<String, String>>> entry : cases.entrySet()) {
+      Eval<String, String, String> eval =
+          local(
+                  Eval.builder("dataset eval", entry.getValue())
+                      .task(
+                          (input, hooks) -> {
+                            taskCalls.incrementAndGet();
+                            return input;
+                          })
+                      .scorer(args -> 1))
+              .dataset("golden")
+              .build();
+
+      IllegalArgumentException error = assertThrows(IllegalArgumentException.class, eval::run);
+      assertEquals(entry.getKey(), error.getMessage());
+      ExecutionException asyncError =
+          assertThrows(ExecutionException.class, () -> eval.runAsync().get(5, TimeUnit.SECONDS));
+      assertEquals(entry.getKey(), asyncError.getCause().getMessage());
+    }
+
+    assertEquals(0, taskCalls.get());
+    assertEquals(0, scrapi.getServer().getRequestCount());
+  }
+
+  @Test
+  public void checksTheRowIDsOfALoadedDatasetBeforeAnyTaskRuns() throws Exception {
+    Map<String, String> cases = new LinkedHashMap<>();
+    cases.put(
+        "{'data':[{'rowID':'row-0','columns':[]},{'rowID':'row-0','columns':[]}]}",
+        "[StatsigAI] data[1] repeats rowID row-0; each record needs its own dataset row.");
+    cases.put(
+        "{'data':[{'columns':[{'name':'question','value':'q0'}]}]}",
+        "[StatsigAI] data[0] needs a rowID when the eval names a dataset.");
+    AtomicInteger taskCalls = new AtomicInteger();
+
+    for (Map.Entry<String, String> entry : cases.entrySet()) {
+      scrapi.enqueue(
+          new MockResponse().setResponseCode(200).setBody(json(entry.getKey()).toString()));
+      Eval<String, String, String> eval =
+          local(
+                  Eval.builder("dataset eval", goldenSet())
+                      .task(
+                          (input, hooks) -> {
+                            taskCalls.incrementAndGet();
+                            return input;
+                          })
+                      .scorer(args -> 1))
+              .build();
+
+      IllegalArgumentException error = assertThrows(IllegalArgumentException.class, eval::run);
+      assertEquals(entry.getValue(), error.getMessage());
+      assertTrue(takeRequest().getPath().startsWith(DATASETS_PATH));
+    }
+
+    assertEquals(0, taskCalls.get());
+    assertNull(scrapi.takeRequest(200, TimeUnit.MILLISECONDS));
+  }
+
+  @Test
+  public void failedDatasetRequestFailsTheRun() throws Exception {
+    AtomicInteger taskCalls = new AtomicInteger();
+    // A record with only an input has an Object expected value.
+    Eval.Builder<String, String, Object> builder =
+        local(
+            Eval.builder(
+                    "dataset eval",
+                    StatsigDataset.of(
+                        "missing", row -> EvalDataRecord.of(row.getColumns().get("question"))))
+                .task(
+                    (input, hooks) -> {
+                      taskCalls.incrementAndGet();
+                      return "";
+                    })
+                .scorer(args -> 1));
+
+    scrapi.enqueue(
+        new MockResponse().setResponseCode(404).setBody("{\"message\":\"Dataset not found\"}"));
+    IllegalStateException notFound =
+        assertThrows(IllegalStateException.class, () -> builder.build().run());
+    assertTrue(
+        notFound.getMessage(),
+        notFound.getMessage().startsWith("[StatsigAI] Failed to load eval dataset 'missing': 404"));
+    assertTrue(notFound.getMessage(), notFound.getMessage().contains("Dataset not found"));
+
+    scrapi.enqueue(new MockResponse().setResponseCode(500));
+    ExecutionException serverError =
+        assertThrows(
+            ExecutionException.class, () -> builder.build().runAsync().get(5, TimeUnit.SECONDS));
+    assertTrue(serverError.getCause() instanceof IllegalStateException);
+    assertTrue(
+        serverError.getCause().getMessage(),
+        serverError
+            .getCause()
+            .getMessage()
+            .startsWith("[StatsigAI] Failed to load eval dataset 'missing': 500"));
+
+    // A failure on a later page fails the run too.
+    enqueueDatasetPage(0, 100);
+    scrapi.enqueue(new MockResponse().setResponseCode(503));
+    IllegalStateException laterPage =
+        assertThrows(IllegalStateException.class, () -> builder.build().run());
+    assertTrue(laterPage.getMessage(), laterPage.getMessage().contains("'missing': 503"));
+
+    for (int i = 0; i < 4; i++) {
+      assertTrue(takeRequest().getPath().startsWith(DATASETS_PATH + "/missing/rows?page="));
+    }
+    assertNull(scrapi.takeRequest(200, TimeUnit.MILLISECONDS));
+
+    int closedPort;
+    try (ServerSocket socket = new ServerSocket(0)) {
+      closedPort = socket.getLocalPort();
+    }
+    builder.datasetEndpoint("http://127.0.0.1:" + closedPort + DATASETS_PATH);
+    UncheckedIOException unreachable =
+        assertThrows(UncheckedIOException.class, () -> builder.build().run());
+    assertTrue(
+        unreachable.getMessage(),
+        unreachable
+            .getMessage()
+            .startsWith(
+                "[StatsigAI] Failed to load eval dataset 'missing': java.net.ConnectException"));
+    ExecutionException asyncUnreachable =
+        assertThrows(
+            ExecutionException.class, () -> builder.build().runAsync().get(5, TimeUnit.SECONDS));
+    assertTrue(asyncUnreachable.getCause() instanceof UncheckedIOException);
+
+    assertEquals(0, taskCalls.get());
+  }
+
+  @Test
+  public void runAsyncLoadsTheDatasetOnTheRunsExecutor() throws Exception {
+    enqueueDatasetPage(0, 2);
+    enqueueOk();
+    ConcurrentLinkedQueue<Runnable> queued = new ConcurrentLinkedQueue<>();
+
+    CompletableFuture<EvalResult<String, String, String>> future =
+        local(
+                Eval.builder("dataset eval", goldenSet())
+                    .task((input, hooks) -> input.replace('q', 'a'))
+                    .scorer(args -> args.getOutput().equals(args.getExpected())))
+            .executor(queued::add)
+            .build()
+            .runAsync();
+
+    // Nothing is loaded until the executor runs the load.
+    assertFalse(future.isDone());
+    assertEquals(1, queued.size());
+    assertEquals(0, scrapi.getServer().getRequestCount());
+    while (!future.isDone()) {
+      Runnable next = queued.poll();
+      assertNotNull("the run stalled", next);
+      next.run();
+    }
+
+    EvalResult<String, String, String> result = future.get();
+    assertEquals(2, result.getResults().size());
+    assertEquals("row-1", result.getResults().get(1).getRowID());
+    assertEquals(DATASETS_PATH + "/golden%20set/rows?page=1&limit=100", takeRequest().getPath());
+    assertEquals("golden set", takeBody().get("dataset").asText());
   }
 
   private static String greet(String input, EvalHooks hooks) {
@@ -1141,8 +1527,45 @@ public class EvalTest {
     return Arrays.asList(EvalDataRecord.of("Foo", "Hi Foo"), EvalDataRecord.of("Bar", "Hello Bar"));
   }
 
+  // Reads the question as the input, the answer as the expected value and the groups as the
+  // category.
+  private static StatsigDataset<String, String> goldenSet() {
+    return StatsigDataset.of(
+        "golden set",
+        row ->
+            EvalDataRecord.of(
+                row.getColumns().get("question"), row.getColumns().get("answer"), row.getGroups()));
+  }
+
+  // A page of dataset rows from..to-1, each with a question, an answer and the group "math".
+  private void enqueueDatasetPage(int from, int to) throws Exception {
+    List<Map<String, Object>> rows = new ArrayList<>();
+    for (int i = from; i < to; i++) {
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("rowID", "row-" + i);
+      row.put("columns", Arrays.asList(column("question", "q" + i), column("answer", "a" + i)));
+      row.put("groups", Collections.singletonList("math"));
+      rows.add(row);
+    }
+    scrapi.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "application/json")
+            .setBody(JSON.writeValueAsString(Collections.singletonMap("data", rows))));
+  }
+
+  private static Map<String, String> column(String name, String value) {
+    Map<String, String> column = new LinkedHashMap<>();
+    column.put("name", name);
+    column.put("value", value);
+    return column;
+  }
+
   private <I, O, E> Eval.Builder<I, O, E> local(Eval.Builder<I, O, E> builder) {
-    return builder.apiKey(API_KEY).endpoint(scrapi.url(SEND_RESULTS_PATH));
+    return builder
+        .apiKey(API_KEY)
+        .endpoint(scrapi.url(SEND_RESULTS_PATH))
+        .datasetEndpoint(scrapi.url(DATASETS_PATH));
   }
 
   private void enqueueOk() {
@@ -1151,7 +1574,7 @@ public class EvalTest {
 
   private RecordedRequest takeRequest() throws InterruptedException {
     RecordedRequest request = scrapi.takeRequest(5, TimeUnit.SECONDS);
-    assertNotNull("expected a send_results request", request);
+    assertNotNull("expected a request", request);
     return request;
   }
 

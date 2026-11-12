@@ -462,6 +462,33 @@ The runner can't see your model calls, so the task reports its tokens with `hook
 
 The run page shows a Latency column, and a Tokens column when the task reported tokens. Neither is graded. Each `EvalResultRecord` also has them, from `getLatencyMs()`, `getInputTokens()` and `getOutputTokens()`. A record whose task fails sends neither, and a record whose task never calls `reportTokens` sends no tokens. `reportTokens` ignores a call with a negative count, and logs a warning.
 
+## Running evals on a Statsig dataset
+
+Pass `StatsigDataset.of(name, toRecord)` to `Eval.builder(...)` to run on an eval dataset from the console. `toRecord` says which columns hold the input and the expected value. The run names the dataset and each result keeps its dataset row ID, so the Eval page compares runs on the dataset row by row.
+
+```java
+import com.statsig.ai.evals.Eval;
+import com.statsig.ai.evals.EvalDataRecord;
+import com.statsig.ai.evals.StatsigDataset;
+
+Eval.builder(
+        "support_bot_quality",
+        StatsigDataset.of(
+            "support_cases",
+            row ->
+                EvalDataRecord.of(
+                    row.getColumns().get("question"),
+                    row.getColumns().get("answer"),
+                    row.getGroups())))
+    .task((input, hooks) -> answer(input))
+    .scorer(args -> args.getOutput().equals(args.getExpected()))
+    .build()
+    .run();
+```
+
+- The rows load when the eval runs, with the eval's API key. If they can't be loaded, `run()` throws and `runAsync()` completes exceptionally.
+- To send your own records for a dataset instead, call `dataset(name)` and give each record the ID of its dataset row with `withRowID(...)`. When the eval names a dataset, every record needs a different row ID, or the run fails before any task runs.
+
 ## Development
 
 - Format & lint: `./gradlew spotlessApply`
