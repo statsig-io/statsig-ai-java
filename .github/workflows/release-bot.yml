@@ -1,0 +1,19 @@
+name: Release Bot
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+    branches: [main, stable]
+  release:
+    types: [released, prereleased]
+
+jobs:
+  run:
+    if: startsWith(github.head_ref, 'releases/') || startsWith(github.head_ref, 'betas/') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: statsig-io/statsig-publish-sdk-action@e2d45e5d45369025b25652b3c4e8ffbee27db4e7
+        with:
+          kong-private-key: ${{ secrets.KONG_GH_APP_PRIVATE_KEY }}

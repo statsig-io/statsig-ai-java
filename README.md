@@ -4,11 +4,25 @@ This module builds on top of the Statsig Java Core SDK to make working with prom
 
 ## Installation
 
-The library is not published yet, so include it in your build the same way you consume your other Statsig modules (local source checkout, composite build, etc.). Once artifacts are published to Maven Central you will be able to add a dependency similar to:
+The SDK is on Maven Central as [`com.statsig:ai-java`](https://central.sonatype.com/artifact/com.statsig/ai-java). Replace `VERSION` with the latest version.
+
+Gradle:
 
 ```kotlin
-implementation("com.statsig:ai-java:<version>")
+implementation("com.statsig:ai-java:VERSION")
 ```
+
+Maven:
+
+```xml
+<dependency>
+  <groupId>com.statsig</groupId>
+  <artifactId>ai-java</artifactId>
+  <version>VERSION</version>
+</dependency>
+```
+
+It brings in the Statsig Java Core SDK (`com.statsig:javacore`), OpenTelemetry and the OpenAI Java SDK. The Anthropic and Google Gen AI SDKs are optional: add them to your app only if you use `AnthropicWrapper` or `GeminiWrapper`.
 
 The SDK requires Java 8+.
 
@@ -481,6 +495,7 @@ Eval.builder(
 
 - Format & lint: `./gradlew spotlessApply`
 - Tests: `./gradlew test`
+- Local publish: `./gradlew publishToMavenLocal -PsignAllPublications=false` installs the jar, sources and javadoc jars in `~/.m2`. Releases are signed and published to Maven Central by the Publish workflow.
 
 The test suite boots a lightweight mock server, so expect a few Statsig shutdown warnings in the console. They are harmless.
 
