@@ -214,6 +214,7 @@ public class EvalTraceTest {
                             CompletableFuture.supplyAsync(
                                 () -> {
                                   openai.chat().completions().create(params);
+                                  hooks.reportTokens(10, 2);
                                   return "Hello " + input;
                                 },
                                 Context.current().wrap(otherThread)))
@@ -246,9 +247,17 @@ public class EvalTraceTest {
             >= TimeUnit.MILLISECONDS.toNanos(50));
     assertTrue(recordSpan.getEndEpochNanos() >= scorer.getEndEpochNanos());
 
+    // A traced record keeps its latency and tokens.
+    assertNotNull(record.getLatencyMs());
+    assertEquals(Long.valueOf(10), record.getInputTokens());
+    assertEquals(Long.valueOf(2), record.getOutputTokens());
+
     JsonNode sent = takeBody().get("results").get(0);
     assertEquals(record.getTraceID(), sent.get("traceID").asText());
     assertEquals(record.getSpanID(), sent.get("spanID").asText());
+    assertEquals(record.getLatencyMs().longValue(), sent.get("latencyMs").asLong());
+    assertEquals(10, sent.get("inputTokens").asLong());
+    assertEquals(2, sent.get("outputTokens").asLong());
   }
 
   @Test
@@ -281,6 +290,8 @@ public class EvalTraceTest {
     assertEquals("[Error]", sent.get("output").asText());
     assertEquals(record.getTraceID(), sent.get("traceID").asText());
     assertEquals(record.getSpanID(), sent.get("spanID").asText());
+    assertNull(record.getLatencyMs());
+    assertFalse(sent.has("latencyMs"));
   }
 
   @Test

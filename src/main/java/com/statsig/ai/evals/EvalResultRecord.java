@@ -3,7 +3,10 @@ package com.statsig.ai.evals;
 import java.util.List;
 import java.util.Map;
 
-/** One record's result: its data, the task's output, and a score from each scorer. */
+/**
+ * One record's result: its data, the task's output, a score from each scorer, and the task's
+ * latency and tokens.
+ */
 public final class EvalResultRecord<I, O, E> {
   private final EvalDataRecord<I, E> record;
   private final O output;
@@ -11,6 +14,9 @@ public final class EvalResultRecord<I, O, E> {
   private final Map<String, Double> scores;
   private final String traceID;
   private final String spanID;
+  private final Long latencyMs;
+  private final Long inputTokens;
+  private final Long outputTokens;
 
   EvalResultRecord(
       EvalDataRecord<I, E> record,
@@ -18,13 +24,19 @@ public final class EvalResultRecord<I, O, E> {
       boolean error,
       Map<String, Double> scores,
       String traceID,
-      String spanID) {
+      String spanID,
+      Long latencyMs,
+      Long inputTokens,
+      Long outputTokens) {
     this.record = record;
     this.output = output;
     this.error = error;
     this.scores = scores;
     this.traceID = traceID;
     this.spanID = spanID;
+    this.latencyMs = latencyMs;
+    this.inputTokens = inputTokens;
+    this.outputTokens = outputTokens;
   }
 
   public I getInput() {
@@ -75,5 +87,29 @@ public final class EvalResultRecord<I, O, E> {
    */
   public String getSpanID() {
     return spanID;
+  }
+
+  /**
+   * Milliseconds from the task's call until its output was ready, rounded. Scorers aren't part of
+   * it. Null when the task failed.
+   */
+  public Long getLatencyMs() {
+    return latencyMs;
+  }
+
+  /**
+   * The input tokens the task reported with {@link EvalHooks#reportTokens(long, long)}, summed.
+   * Null when it reported none or failed.
+   */
+  public Long getInputTokens() {
+    return inputTokens;
+  }
+
+  /**
+   * The output tokens the task reported with {@link EvalHooks#reportTokens(long, long)}, summed.
+   * Null when it reported none or failed.
+   */
+  public Long getOutputTokens() {
+    return outputTokens;
   }
 }

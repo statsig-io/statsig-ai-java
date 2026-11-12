@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -47,8 +48,10 @@ import java.util.function.Supplier;
  *
  * <p>To run on an eval dataset from the console, pass a {@link StatsigDataset} instead of the data.
  *
- * <p>Records run concurrently, and so do the scorers for a record. Sending needs a Statsig Console
- * API key, from {@link Builder#apiKey(String)} or the {@code STATSIG_API_KEY} environment variable.
+ * <p>Records run concurrently, and so do the scorers for a record. Each result also carries how
+ * long the task took, and the tokens it reported with {@link EvalHooks#reportTokens(long, long)}.
+ * Sending needs a Statsig Console API key, from {@link Builder#apiKey(String)} or the {@code
+ * STATSIG_API_KEY} environment variable.
  *
  * <p>Tasks and scorers run with the Statsig environment {@code eval}, so their spans get {@code
  * statsig.environment=eval}. When tracing is initialized ({@code Otel.initialize}), each record
@@ -88,6 +91,7 @@ public final class Eval<I, O, E> {
   private final String endpoint;
   private final String datasetEndpoint;
   private final long flushTimeoutMillis;
+  private final LongSupplier nanoTime;
 
   private Eval(Builder<I, O, E> builder, String apiKey) {
     this.name = builder.name;
@@ -108,6 +112,7 @@ public final class Eval<I, O, E> {
     this.endpoint = builder.endpoint;
     this.datasetEndpoint = builder.datasetEndpoint;
     this.flushTimeoutMillis = builder.flushTimeoutMillis;
+    this.nanoTime = builder.nanoTime;
   }
 
   /**
@@ -236,8 +241,8 @@ public final class Eval<I, O, E> {
     }
   }
 
-  // Like Node's Eval(): a failed task gives an error record with every score 0. The record runs
-  // on an executor thread in evalContext, which has the eval environment.
+  // Like Node's Eval(): a failed task gives an error record with every score 0, and no latency or
+  // tokens. The record runs on an executor thread in evalContext, which has the eval environment.
   private CompletableFuture<RecordOutcome<O>> runRecord(
       EvalDataRecord<I, E> record,
       int recordIndex,
@@ -297,12 +302,15 @@ public final class Eval<I, O, E> {
     return CompletableFuture.completedFuture(record.getInput())
         .thenCompose(input -> callTask(input, hooks))
         .thenCompose(
-            output ->
-                scoreRecord(record, output, recordExecutor, traceRecords)
-                    .thenApply(scores -> RecordOutcome.succeeded(output, scores)));
+            taskOutput ->
+                scoreRecord(record, taskOutput.output, recordExecutor, traceRecords)
+                    .thenApply(scores -> RecordOutcome.succeeded(taskOutput, scores)));
   }
 
-  private CompletableFuture<O> callTask(I input, EvalHooks hooks) {
+  // Times the task from the call until its future completes, as config runs time the completion
+  // call, and reads the reported tokens at that moment.
+  private CompletableFuture<TaskOutput<O>> callTask(I input, EvalHooks hooks) {
+    long start = nanoTime.getAsLong();
     CompletableFuture<O> output;
     try {
       output = task.run(input, hooks);
@@ -312,7 +320,10 @@ public final class Eval<I, O, E> {
     if (output == null) {
       throw new NullPointerException("asyncTask returned a null CompletableFuture");
     }
-    return output;
+    return output.thenApply(
+        value ->
+            new TaskOutput<>(
+                value, Math.round((nanoTime.getAsLong() - start) / 1e6), hooks.getTokenTotals()));
   }
 
   private CompletableFuture<Map<String, ScoreWithMetadata>> scoreRecord(
@@ -443,7 +454,10 @@ public final class Eval<I, O, E> {
               outcome.error,
               Collections.unmodifiableMap(scores),
               outcome.traceID,
-              outcome.spanID));
+              outcome.spanID,
+              outcome.latencyMs,
+              outcome.inputTokens,
+              outcome.outputTokens));
       sent.add(
           new EvalResultsSender.SentRecord(
               record,
@@ -451,7 +465,10 @@ public final class Eval<I, O, E> {
               outcome.error,
               outcome.scores,
               outcome.traceID,
-              outcome.spanID));
+              outcome.spanID,
+              outcome.latencyMs,
+              outcome.inputTokens,
+              outcome.outputTokens));
       anyError |= outcome.error;
     }
     List<EvalResultRecord<I, O, E>> unmodifiableResults = Collections.unmodifiableList(results);
@@ -549,6 +566,19 @@ public final class Eval<I, O, E> {
     return Executors.newFixedThreadPool(threads, factory);
   }
 
+  // The task's output, how long it took in ms, and the tokens it reported (null for none).
+  private static final class TaskOutput<O> {
+    final O output;
+    final long latencyMs;
+    final EvalHooks.TokenTotals tokens;
+
+    TaskOutput(O output, long latencyMs, EvalHooks.TokenTotals tokens) {
+      this.output = output;
+      this.latencyMs = latencyMs;
+      this.tokens = tokens;
+    }
+  }
+
   private static final class RecordOutcome<O> {
     final O output;
     final boolean error;
@@ -556,26 +586,45 @@ public final class Eval<I, O, E> {
     // The record's trace and root span. Null when the record isn't traced.
     final String traceID;
     final String spanID;
+    final Long latencyMs;
+    final Long inputTokens;
+    final Long outputTokens;
 
     private RecordOutcome(
         O output,
         boolean error,
         Map<String, ScoreWithMetadata> scores,
         String traceID,
-        String spanID) {
+        String spanID,
+        Long latencyMs,
+        Long inputTokens,
+        Long outputTokens) {
       this.output = output;
       this.error = error;
       this.scores = scores;
       this.traceID = traceID;
       this.spanID = spanID;
+      this.latencyMs = latencyMs;
+      this.inputTokens = inputTokens;
+      this.outputTokens = outputTokens;
     }
 
-    static <O> RecordOutcome<O> succeeded(O output, Map<String, ScoreWithMetadata> scores) {
-      return new RecordOutcome<>(output, false, scores, null, null);
+    static <O> RecordOutcome<O> succeeded(
+        TaskOutput<O> task, Map<String, ScoreWithMetadata> scores) {
+      EvalHooks.TokenTotals tokens = task.tokens;
+      return new RecordOutcome<>(
+          task.output,
+          false,
+          scores,
+          null,
+          null,
+          task.latencyMs,
+          tokens == null ? null : tokens.inputTokens,
+          tokens == null ? null : tokens.outputTokens);
     }
 
     static <O> RecordOutcome<O> failed(Map<String, ScoreWithMetadata> zeroScores) {
-      return new RecordOutcome<>(null, true, zeroScores, null, null);
+      return new RecordOutcome<>(null, true, zeroScores, null, null, null, null, null);
     }
 
     // Like Node's getActiveSpanIDs: no IDs unless the span is valid.
@@ -583,7 +632,15 @@ public final class Eval<I, O, E> {
       if (!span.isValid()) {
         return this;
       }
-      return new RecordOutcome<>(output, error, scores, span.getTraceId(), span.getSpanId());
+      return new RecordOutcome<>(
+          output,
+          error,
+          scores,
+          span.getTraceId(),
+          span.getSpanId(),
+          latencyMs,
+          inputTokens,
+          outputTokens);
     }
   }
 
@@ -634,6 +691,7 @@ public final class Eval<I, O, E> {
     private String datasetEndpoint = StatsigDataset.DEFAULT_ENDPOINT;
     private Function<String, String> getenv = System::getenv;
     private long flushTimeoutMillis = DEFAULT_FLUSH_TIMEOUT_MILLIS;
+    private LongSupplier nanoTime = System::nanoTime;
 
     private Builder(TaskStep<I, E> step, AsyncEvalTask<I, O> task) {
       this.name = step.name;
@@ -754,6 +812,12 @@ public final class Eval<I, O, E> {
     // How long to wait for the record spans to export before sending. For tests.
     Builder<I, O, E> flushTimeout(long timeout, TimeUnit unit) {
       this.flushTimeoutMillis = unit.toMillis(timeout);
+      return this;
+    }
+
+    // The clock that times tasks, in nanoseconds. For tests.
+    Builder<I, O, E> nanoTime(LongSupplier nanoTime) {
+      this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
       return this;
     }
 

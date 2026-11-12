@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.statsig.ai.testutil.MockScrapiServer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.ContextKey;
@@ -33,8 +34,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -89,6 +92,9 @@ public class EvalTest {
     assertFalse(results.get(0).isError());
     assertEquals(Collections.singletonMap("Grader", 0.0), results.get(0).getScores());
     assertEquals(Collections.singletonMap("Grader", 1.0), results.get(1).getScores());
+    assertNotNull(results.get(0).getLatencyMs());
+    assertNull(results.get(0).getInputTokens());
+    assertNull(results.get(0).getOutputTokens());
 
     RecordedRequest request = takeRequest();
     assertEquals("POST", request.getMethod());
@@ -105,12 +111,12 @@ public class EvalTest {
         json(
             "{'input':'Foo','output':'Hello Foo','expected':'Hi Foo','error':false,"
                 + "'scores':{'Grader':{'score':0.0}}}"),
-        body.get("results").get(0));
+        withoutLatency(body.get("results").get(0)));
     assertEquals(
         json(
             "{'input':'Bar','output':'Hello Bar','expected':'Hello Bar','error':false,"
                 + "'scores':{'Grader':{'score':1.0}}}"),
-        body.get("results").get(1));
+        withoutLatency(body.get("results").get(1)));
   }
 
   @Test
@@ -333,6 +339,7 @@ public class EvalTest {
       zeros.put("Grader", 0.0);
       zeros.put("other", 0.0);
       assertEquals(zeros, failed.getScores());
+      assertNull(failed.getLatencyMs());
     }
     assertStderrContains(
         "[StatsigAI] Eval failed for input Boom: java.lang.IllegalStateException: Task failed");
@@ -394,6 +401,254 @@ public class EvalTest {
     assertEquals("Hello Foo", results.get(0).get("output").asText());
     assertEquals("[Error]", results.get(1).get("output").asText());
     assertTrue(results.get(1).get("error").asBoolean());
+  }
+
+  @Test
+  public void sendsHowLongTheTaskTookAsLatencyMs() throws Exception {
+    enqueueOk();
+    AtomicLong now = new AtomicLong(1_000_000_000L);
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("test task", Arrays.asList(EvalDataRecord.of("Foo", "Hello Foo")))
+                    .task(
+                        (input, hooks) -> {
+                          now.addAndGet(250_400_000L);
+                          return "Hello " + input;
+                        })
+                    .scorer(
+                        args -> {
+                          // Scoring isn't part of the task's latency.
+                          now.addAndGet(1_000_000_000L);
+                          return 1;
+                        }))
+            .nanoTime(now::get)
+            .build()
+            .run();
+
+    assertEquals(Long.valueOf(250), result.getResults().get(0).getLatencyMs());
+    JsonNode sent = takeBody().get("results").get(0);
+    assertTrue(sent.get("latencyMs").isIntegralNumber());
+    assertEquals(250, sent.get("latencyMs").asLong());
+  }
+
+  @Test
+  public void timesAnAsyncTaskUntilItsFutureCompletes() throws Exception {
+    enqueueOk();
+    AtomicLong now = new AtomicLong();
+    ScheduledExecutorService model = Executors.newSingleThreadScheduledExecutor();
+    try {
+      EvalResult<String, String, String> result =
+          local(
+                  Eval.builder("test task", Arrays.asList(EvalDataRecord.of("Foo", "Hello Foo")))
+                      .asyncTask(
+                          (input, hooks) -> {
+                            CompletableFuture<String> response = new CompletableFuture<>();
+                            // The model answers on another thread, well after the task returns.
+                            model.schedule(
+                                () -> {
+                                  now.addAndGet(1_200_000_000L);
+                                  hooks.reportTokens(12, 3);
+                                  response.complete("Hello " + input);
+                                },
+                                50,
+                                TimeUnit.MILLISECONDS);
+                            return response;
+                          })
+                      .scorer(args -> args.getOutput().equals(args.getExpected())))
+              .nanoTime(now::get)
+              .build()
+              .run();
+
+      EvalResultRecord<String, String, String> record = result.getResults().get(0);
+      assertEquals(1.0, record.getScores().get("Grader"), 0);
+      assertEquals(Long.valueOf(1200), record.getLatencyMs());
+      assertEquals(Long.valueOf(12), record.getInputTokens());
+      assertEquals(Long.valueOf(3), record.getOutputTokens());
+      JsonNode sent = takeBody().get("results").get(0);
+      assertEquals(1200, sent.get("latencyMs").asLong());
+      assertEquals(12, sent.get("inputTokens").asLong());
+      assertEquals(3, sent.get("outputTokens").asLong());
+    } finally {
+      model.shutdownNow();
+    }
+  }
+
+  @Test
+  public void sendsTheSumOfTheTokensATaskReports() throws Exception {
+    enqueueOk();
+    AtomicReference<EvalHooks> taskHooks = new AtomicReference<>();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("test task", Arrays.asList(EvalDataRecord.of("Foo", "Hello Foo")))
+                    .task(
+                        (input, hooks) -> {
+                          taskHooks.set(hooks);
+                          hooks.reportTokens(120, 30);
+                          hooks.reportTokens(80, 12);
+                          return "Hello " + input;
+                        })
+                    .scorer(
+                        args -> {
+                          // The output is ready, so this doesn't count.
+                          taskHooks.get().reportTokens(1000, 1000);
+                          return 1;
+                        }))
+            .build()
+            .run();
+
+    EvalResultRecord<String, String, String> record = result.getResults().get(0);
+    assertEquals(Long.valueOf(200), record.getInputTokens());
+    assertEquals(Long.valueOf(42), record.getOutputTokens());
+    assertEquals(
+        json(
+            "{'input':'Foo','output':'Hello Foo','expected':'Hello Foo','error':false,"
+                + "'inputTokens':200,'outputTokens':42,'scores':{'Grader':{'score':1.0}}}"),
+        withoutLatency(takeBody().get("results").get(0)));
+  }
+
+  @Test
+  public void addsUpTokensReportedFromManyThreads() throws Exception {
+    enqueueOk();
+    int threads = 8;
+    int callsPerThread = 1000;
+    ExecutorService pool = Executors.newFixedThreadPool(threads);
+    try {
+      EvalResult<String, String, String> result =
+          local(
+                  Eval.builder("test task", Arrays.asList(EvalDataRecord.of("Foo", "Hello Foo")))
+                      .asyncTask(
+                          (input, hooks) -> {
+                            List<CompletableFuture<Void>> calls = new ArrayList<>();
+                            for (int t = 0; t < threads; t++) {
+                              calls.add(
+                                  CompletableFuture.runAsync(
+                                      () -> {
+                                        for (int i = 0; i < callsPerThread; i++) {
+                                          hooks.reportTokens(2, 1);
+                                        }
+                                      },
+                                      pool));
+                            }
+                            return CompletableFuture.allOf(
+                                    calls.toArray(new CompletableFuture<?>[0]))
+                                .thenApply(ignored -> "Hello " + input);
+                          })
+                      .scorer(args -> 1))
+              .build()
+              .run();
+
+      EvalResultRecord<String, String, String> record = result.getResults().get(0);
+      assertEquals(Long.valueOf(2L * threads * callsPerThread), record.getInputTokens());
+      assertEquals(Long.valueOf((long) threads * callsPerThread), record.getOutputTokens());
+      takeRequest();
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
+  public void sendsNoTokensForARecordWhoseTaskNeverReportsThem() throws Exception {
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("test task", greetings())
+                    .task(
+                        (input, hooks) -> {
+                          if (input.equals("Foo")) {
+                            hooks.reportTokens(10, 2);
+                          }
+                          return "Hello " + input;
+                        })
+                    .scorer(args -> 1))
+            .build()
+            .run();
+
+    EvalResultRecord<String, String, String> foo = result.getResults().get(0);
+    EvalResultRecord<String, String, String> bar = result.getResults().get(1);
+    assertEquals(Long.valueOf(10), foo.getInputTokens());
+    assertEquals(Long.valueOf(2), foo.getOutputTokens());
+    assertNotNull(bar.getLatencyMs());
+    assertNull(bar.getInputTokens());
+    assertNull(bar.getOutputTokens());
+
+    JsonNode results = takeBody().get("results");
+    assertEquals(10, results.get(0).get("inputTokens").asLong());
+    assertEquals(2, results.get(0).get("outputTokens").asLong());
+    assertTrue(results.get(1).get("latencyMs").isIntegralNumber());
+    assertFalse(results.get(1).has("inputTokens"));
+    assertFalse(results.get(1).has("outputTokens"));
+  }
+
+  @Test
+  public void sendsNoLatencyOrTokensForARecordWhoseTaskFails() throws Exception {
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder(
+                        "test task",
+                        Arrays.asList(
+                            EvalDataRecord.of("Throw", "Anything"),
+                            EvalDataRecord.of("Fail", "Anything")))
+                    .<String>asyncTask(
+                        (input, hooks) -> {
+                          hooks.reportTokens(10, 2);
+                          if (input.equals("Throw")) {
+                            throw new IllegalStateException("Task threw");
+                          }
+                          return failedFuture(new IllegalStateException("Task failed"));
+                        })
+                    .scorer(args -> 1))
+            .build()
+            .run();
+
+    JsonNode results = takeBody().get("results");
+    for (int i = 0; i < 2; i++) {
+      EvalResultRecord<String, String, String> record = result.getResults().get(i);
+      assertTrue(record.isError());
+      assertNull(record.getLatencyMs());
+      assertNull(record.getInputTokens());
+      assertNull(record.getOutputTokens());
+      JsonNode sent = results.get(i);
+      assertTrue(sent.get("error").asBoolean());
+      assertFalse(sent.has("latencyMs"));
+      assertFalse(sent.has("inputTokens"));
+      assertFalse(sent.has("outputTokens"));
+    }
+  }
+
+  @Test
+  public void ignoresNegativeTokenCounts() throws Exception {
+    enqueueOk();
+
+    EvalResult<String, String, String> result =
+        local(
+                Eval.builder("test task", Arrays.asList(EvalDataRecord.of("Foo", "Hello Foo")))
+                    .task(
+                        (input, hooks) -> {
+                          hooks.reportTokens(-1, 5);
+                          hooks.reportTokens(5, -1);
+                          hooks.reportTokens(7, 3);
+                          return "Hello " + input;
+                        })
+                    .scorer(args -> 1))
+            .build()
+            .run();
+
+    EvalResultRecord<String, String, String> record = result.getResults().get(0);
+    assertFalse(record.isError());
+    assertEquals(Long.valueOf(7), record.getInputTokens());
+    assertEquals(Long.valueOf(3), record.getOutputTokens());
+    assertStderrContains(
+        "[StatsigAI] reportTokens() needs inputTokens and outputTokens of at least 0. Ignoring: -1,"
+            + " 5");
+    assertStderrContains("Ignoring: 5, -1");
+    JsonNode sent = takeBody().get("results").get(0);
+    assertEquals(7, sent.get("inputTokens").asLong());
+    assertEquals(3, sent.get("outputTokens").asLong());
   }
 
   @Test
@@ -921,7 +1176,7 @@ public class EvalTest {
         json(
             "{'input':'q200','output':'a200','expected':'a200','category':['math'],"
                 + "'rowID':'row-200','error':false,'scores':{'Grader':{'score':1.0}}}"),
-        body.get("results").get(200));
+        withoutLatency(body.get("results").get(200)));
     assertEquals("row-0", body.get("results").get(0).get("rowID").asText());
   }
 
@@ -1021,12 +1276,12 @@ public class EvalTest {
         json(
             "{'input':'Foo','output':'Hello Foo','expected':'Hello Foo','rowID':'row-1',"
                 + "'error':false,'scores':{'Grader':{'score':1.0}}}"),
-        body.get("results").get(0));
+        withoutLatency(body.get("results").get(0)));
     assertEquals(
         json(
             "{'input':'Bar','output':'Hello Bar','expected':'Hello Bar','category':'greeting',"
                 + "'rowID':'row-2','error':false,'scores':{'Grader':{'score':1.0}}}"),
-        body.get("results").get(1));
+        withoutLatency(body.get("results").get(1)));
     assertEquals(1, scrapi.getServer().getRequestCount());
   }
 
@@ -1325,6 +1580,18 @@ public class EvalTest {
 
   private JsonNode takeBody() throws Exception {
     return JSON.readTree(takeRequest().getBody().readUtf8());
+  }
+
+  // Checks that a sent result has a latencyMs in whole ms, and returns the rest of it, since the
+  // latency varies from run to run.
+  private static JsonNode withoutLatency(JsonNode result) {
+    JsonNode latency = result.get("latencyMs");
+    assertTrue(
+        "latencyMs should be a whole number of ms: " + result,
+        latency != null && latency.isIntegralNumber() && latency.asLong() >= 0);
+    ObjectNode rest = result.deepCopy();
+    rest.remove("latencyMs");
+    return rest;
   }
 
   // JSON with single quotes, to keep the expected payloads readable.
