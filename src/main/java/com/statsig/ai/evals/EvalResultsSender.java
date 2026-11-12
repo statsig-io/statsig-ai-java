@@ -21,12 +21,12 @@ final class EvalResultsSender {
   static final String DEFAULT_ENDPOINT = "https://api.statsig.com/console/v1/evals/send_results";
   static final String ERROR_OUTPUT = "[Error]";
 
-  private static final int CONNECT_TIMEOUT_MS = 10_000;
-  private static final int READ_TIMEOUT_MS = 30_000;
+  static final int CONNECT_TIMEOUT_MS = 10_000;
+  static final int READ_TIMEOUT_MS = 30_000;
   private static final int MAX_LOGGED_BODY_CHARS = 500;
 
   // Like JSON.stringify, an object with no properties is "{}" rather than an error.
-  private static final ObjectMapper MAPPER =
+  static final ObjectMapper MAPPER =
       new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
 
   private EvalResultsSender() {}
@@ -64,6 +64,7 @@ final class EvalResultsSender {
       String apiKey,
       List<SentRecord> records,
       String evalRunName,
+      String dataset,
       Map<String, Double> summaryScores,
       Map<String, Object> parameters) {
     try {
@@ -71,7 +72,8 @@ final class EvalResultsSender {
         validateSummary(summaryScores);
       }
       byte[] body =
-          MAPPER.writeValueAsBytes(payload(records, evalRunName, summaryScores, parameters));
+          MAPPER.writeValueAsBytes(
+              payload(records, evalRunName, dataset, summaryScores, parameters));
       String url = endpoint + "/" + encodeURIComponent(name);
       HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
       try {
@@ -112,6 +114,7 @@ final class EvalResultsSender {
   private static Map<String, Object> payload(
       List<SentRecord> records,
       String evalRunName,
+      String dataset,
       Map<String, Double> summaryScores,
       Map<String, Object> parameters) {
     List<Map<String, Object>> results = new ArrayList<>();
@@ -122,6 +125,9 @@ final class EvalResultsSender {
     payload.put("results", results);
     if (evalRunName != null) {
       payload.put("name", evalRunName);
+    }
+    if (dataset != null) {
+      payload.put("dataset", dataset);
     }
     if (summaryScores != null) {
       payload.put("summaryScores", summaryScores);
@@ -147,6 +153,9 @@ final class EvalResultsSender {
     }
     if (record.getCategoryAsGiven() != null) {
       result.put("category", record.getCategoryAsGiven());
+    }
+    if (record.getRowID() != null) {
+      result.put("rowID", record.getRowID());
     }
     if (sent.traceID != null) {
       result.put("traceID", sent.traceID);
@@ -238,7 +247,7 @@ final class EvalResultsSender {
     }
   }
 
-  private static String readBody(HttpURLConnection connection, int status) throws IOException {
+  static String readBody(HttpURLConnection connection, int status) throws IOException {
     InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
     if (stream == null) {
       return "";
@@ -254,7 +263,7 @@ final class EvalResultsSender {
     }
   }
 
-  private static String truncate(String value) {
+  static String truncate(String value) {
     return value.length() <= MAX_LOGGED_BODY_CHARS
         ? value
         : value.substring(0, MAX_LOGGED_BODY_CHARS) + "...";

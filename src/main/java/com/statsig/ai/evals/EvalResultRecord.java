@@ -49,6 +49,11 @@ public final class EvalResultRecord<I, O, E> {
     return record.getCategories();
   }
 
+  /** The ID of the record's row in the eval's dataset, or null when it has none. */
+  public String getRowID() {
+    return record.getRowID();
+  }
+
   /** True when the task failed. Every score is then 0. */
   public boolean isError() {
     return error;

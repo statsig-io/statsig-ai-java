@@ -11,10 +11,12 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.common.CompletableResultCode;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -43,6 +45,8 @@ import java.util.function.Supplier;
  *         .run();
  * }</pre>
  *
+ * <p>To run on an eval dataset from the console, pass a {@link StatsigDataset} instead of the data.
+ *
  * <p>Records run concurrently, and so do the scorers for a record. Sending needs a Statsig Console
  * API key, from {@link Builder#apiKey(String)} or the {@code STATSIG_API_KEY} environment variable.
  *
@@ -69,7 +73,10 @@ public final class Eval<I, O, E> {
   static final long DEFAULT_FLUSH_TIMEOUT_MILLIS = 30_000;
 
   private final String name;
+  // Exactly one of data and statsigDataset is set.
   private final Iterable<EvalDataRecord<I, E>> data;
+  private final StatsigDataset<I, E> statsigDataset;
+  private final String dataset;
   private final AsyncEvalTask<I, O> task;
   private final Map<String, EvalScorer<I, O, E>> scorers;
   private final Map<String, Object> parameters;
@@ -79,11 +86,18 @@ public final class Eval<I, O, E> {
   private final Executor executor;
   private final String apiKey;
   private final String endpoint;
+  private final String datasetEndpoint;
   private final long flushTimeoutMillis;
 
   private Eval(Builder<I, O, E> builder, String apiKey) {
     this.name = builder.name;
     this.data = builder.data;
+    this.statsigDataset = builder.statsigDataset;
+    // Like Node's `options.dataset ?? data.name`.
+    this.dataset =
+        builder.dataset != null
+            ? builder.dataset
+            : statsigDataset != null ? statsigDataset.getName() : null;
     this.task = builder.task;
     this.scorers = Collections.unmodifiableMap(new LinkedHashMap<>(builder.scorers));
     this.parameters = Collections.unmodifiableMap(new LinkedHashMap<>(builder.parameters));
@@ -92,6 +106,7 @@ public final class Eval<I, O, E> {
     this.executor = builder.executor;
     this.apiKey = apiKey;
     this.endpoint = builder.endpoint;
+    this.datasetEndpoint = builder.datasetEndpoint;
     this.flushTimeoutMillis = builder.flushTimeoutMillis;
   }
 
@@ -100,12 +115,28 @@ public final class Eval<I, O, E> {
    * task next with {@link TaskStep#task(EvalTask)} or {@link TaskStep#asyncTask(AsyncEvalTask)}.
    */
   public static <I, E> TaskStep<I, E> builder(String name, Iterable<EvalDataRecord<I, E>> data) {
-    return new TaskStep<>(name, data);
+    return new TaskStep<>(name, Objects.requireNonNull(data, "data"), null);
+  }
+
+  /**
+   * Starts an eval named {@code name} on the rows of a Statsig eval dataset. The rows load when the
+   * eval runs, with the eval's API key. The run names the dataset (see {@link
+   * Builder#dataset(String)}) and each result keeps its row's ID, so the console compares runs on
+   * the dataset row by row.
+   */
+  public static <I, E> TaskStep<I, E> builder(String name, StatsigDataset<I, E> dataset) {
+    return new TaskStep<>(name, null, Objects.requireNonNull(dataset, "dataset"));
   }
 
   /**
    * Runs the eval, sends the results to Statsig, and returns them. A failed send is logged, not
    * thrown.
+   *
+   * @throws IllegalStateException if the eval's {@link StatsigDataset} can't be loaded because the
+   *     API answers with a non-2xx status
+   * @throws java.io.UncheckedIOException if the dataset can't be loaded because of a network error
+   * @throws IllegalArgumentException if the eval names a dataset and a record has no row ID, or the
+   *     same one as an earlier record. No task runs then.
    */
   public EvalResult<I, O, E> run() {
     try {
@@ -122,35 +153,31 @@ public final class Eval<I, O, E> {
     }
   }
 
-  /** Like {@link #run()}, but returns at once with a future of the results. */
+  /**
+   * Like {@link #run()}, but returns at once with a future of the results. A {@link StatsigDataset}
+   * loads on the run's executor. The future completes exceptionally when {@link #run()} would
+   * throw.
+   */
   public CompletableFuture<EvalResult<I, O, E>> runAsync() {
     ExecutorService ownExecutor = executor == null ? newDefaultExecutor() : null;
     try {
       Executor baseExecutor = executor != null ? executor : ownExecutor;
       // Tasks see the caller's OpenTelemetry context, as Node's async context carries it.
       Context callerContext = Context.current();
-      // Without Otel.initialize there's no exporter, so records aren't traced.
-      boolean traceRecords = OtelSingleton.isInitialized();
-      Context evalContext =
-          StatsigContextUtils.withStatsigEnvironment(callerContext, EVAL_ENVIRONMENT);
-      if (traceRecords) {
-        // Like Node's trace.deleteSpan: each record starts its own trace, even when the eval runs
-        // inside another span. The other context values, such as the environment, are kept.
-        evalContext = evalContext.with(Span.getInvalid());
+      CompletableFuture<EvalResult<I, O, E>> result;
+      if (statsigDataset != null) {
+        result =
+            CompletableFuture.supplyAsync(
+                    () -> statsigDataset.load(datasetEndpoint, apiKey),
+                    callerContext.wrap(baseExecutor))
+                .thenCompose(records -> runRecords(records, baseExecutor, callerContext));
+      } else {
+        List<EvalDataRecord<I, E>> records = new ArrayList<>();
+        for (EvalDataRecord<I, E> record : data) {
+          records.add(Objects.requireNonNull(record, "data must not contain null records"));
+        }
+        result = runRecords(records, baseExecutor, callerContext);
       }
-      List<EvalDataRecord<I, E>> records = new ArrayList<>();
-      for (EvalDataRecord<I, E> record : data) {
-        records.add(Objects.requireNonNull(record, "data must not contain null records"));
-      }
-      List<CompletableFuture<RecordOutcome<O>>> outcomes = new ArrayList<>();
-      for (int i = 0; i < records.size(); i++) {
-        outcomes.add(runRecord(records.get(i), i, baseExecutor, evalContext, traceRecords));
-      }
-      CompletableFuture<EvalResult<I, O, E>> result =
-          CompletableFuture.allOf(outcomes.toArray(new CompletableFuture<?>[0]))
-              .thenApplyAsync(
-                  ignored -> finish(records, outcomes, traceRecords),
-                  callerContext.wrap(baseExecutor));
       if (ownExecutor == null) {
         return result;
       }
@@ -162,6 +189,50 @@ public final class Eval<I, O, E> {
       CompletableFuture<EvalResult<I, O, E>> failed = new CompletableFuture<>();
       failed.completeExceptionally(e);
       return failed;
+    }
+  }
+
+  private CompletableFuture<EvalResult<I, O, E>> runRecords(
+      List<EvalDataRecord<I, E>> records, Executor baseExecutor, Context callerContext) {
+    if (dataset != null) {
+      assertDatasetRowIDs(records);
+    }
+    // Without Otel.initialize there's no exporter, so records aren't traced.
+    boolean traceRecords = OtelSingleton.isInitialized();
+    Context evalContext =
+        StatsigContextUtils.withStatsigEnvironment(callerContext, EVAL_ENVIRONMENT);
+    if (traceRecords) {
+      // Like Node's trace.deleteSpan: each record starts its own trace, even when the eval runs
+      // inside another span. The other context values, such as the environment, are kept.
+      evalContext = evalContext.with(Span.getInvalid());
+    }
+    List<CompletableFuture<RecordOutcome<O>>> outcomes = new ArrayList<>();
+    for (int i = 0; i < records.size(); i++) {
+      outcomes.add(runRecord(records.get(i), i, baseExecutor, evalContext, traceRecords));
+    }
+    return CompletableFuture.allOf(outcomes.toArray(new CompletableFuture<?>[0]))
+        .thenApplyAsync(
+            ignored -> finish(records, outcomes, traceRecords), callerContext.wrap(baseExecutor));
+  }
+
+  // Node's assertDatasetRowIDs, checked before any task runs: the API rejects a run on a dataset
+  // whose results don't each name a different row of it.
+  private static void assertDatasetRowIDs(List<? extends EvalDataRecord<?, ?>> records) {
+    Set<String> seen = new HashSet<>();
+    for (int index = 0; index < records.size(); index++) {
+      String rowID = records.get(index).getRowID();
+      if (rowID == null || rowID.isEmpty()) {
+        throw new IllegalArgumentException(
+            "[StatsigAI] data[" + index + "] needs a rowID when the eval names a dataset.");
+      }
+      if (!seen.add(rowID)) {
+        throw new IllegalArgumentException(
+            "[StatsigAI] data["
+                + index
+                + "] repeats rowID "
+                + rowID
+                + "; each record needs its own dataset row.");
+      }
     }
   }
 
@@ -388,7 +459,8 @@ public final class Eval<I, O, E> {
     if (traceRecords) {
       flushRecordSpans();
     }
-    EvalResultsSender.send(endpoint, name, apiKey, sent, evalRunName, summaryScores, parameters);
+    EvalResultsSender.send(
+        endpoint, name, apiKey, sent, evalRunName, dataset, summaryScores, parameters);
     return new EvalResult<>(unmodifiableResults, anyError, summaryScores);
   }
 
@@ -515,27 +587,33 @@ public final class Eval<I, O, E> {
     }
   }
 
-  /** Returned by {@link Eval#builder(String, Iterable)}: picks the task. */
+  /**
+   * Returned by {@link Eval#builder(String, Iterable)} and {@link Eval#builder(String,
+   * StatsigDataset)}: picks the task.
+   */
   public static final class TaskStep<I, E> {
     private final String name;
     private final Iterable<EvalDataRecord<I, E>> data;
+    private final StatsigDataset<I, E> statsigDataset;
 
-    private TaskStep(String name, Iterable<EvalDataRecord<I, E>> data) {
+    private TaskStep(
+        String name, Iterable<EvalDataRecord<I, E>> data, StatsigDataset<I, E> statsigDataset) {
       this.name = Objects.requireNonNull(name, "name");
-      this.data = Objects.requireNonNull(data, "data");
+      this.data = data;
+      this.statsigDataset = statsigDataset;
     }
 
     /** The task that turns each record's input into an output. */
     public <O> Builder<I, O, E> task(EvalTask<I, O> task) {
       Objects.requireNonNull(task, "task");
       return new Builder<>(
-          name, data, (input, hooks) -> CompletableFuture.completedFuture(task.run(input, hooks)));
+          this, (input, hooks) -> CompletableFuture.completedFuture(task.run(input, hooks)));
     }
 
     /** Like {@link #task(EvalTask)}, for a task that returns a {@code CompletableFuture}. */
     public <O> Builder<I, O, E> asyncTask(AsyncEvalTask<I, O> task) {
       Objects.requireNonNull(task, "task");
-      return new Builder<>(name, data, task);
+      return new Builder<>(this, task);
     }
   }
 
@@ -543,20 +621,24 @@ public final class Eval<I, O, E> {
   public static final class Builder<I, O, E> {
     private final String name;
     private final Iterable<EvalDataRecord<I, E>> data;
+    private final StatsigDataset<I, E> statsigDataset;
     private final AsyncEvalTask<I, O> task;
     private final Map<String, EvalScorer<I, O, E>> scorers = new LinkedHashMap<>();
     private final Map<String, Object> parameters = new LinkedHashMap<>();
     private String evalRunName;
+    private String dataset;
     private Function<List<EvalResultRecord<I, O, E>>, Map<String, ? extends Number>> summaryScorer;
     private Executor executor;
     private String apiKey;
     private String endpoint = EvalResultsSender.DEFAULT_ENDPOINT;
+    private String datasetEndpoint = StatsigDataset.DEFAULT_ENDPOINT;
     private Function<String, String> getenv = System::getenv;
     private long flushTimeoutMillis = DEFAULT_FLUSH_TIMEOUT_MILLIS;
 
-    private Builder(String name, Iterable<EvalDataRecord<I, E>> data, AsyncEvalTask<I, O> task) {
-      this.name = name;
-      this.data = data;
+    private Builder(TaskStep<I, E> step, AsyncEvalTask<I, O> task) {
+      this.name = step.name;
+      this.data = step.data;
+      this.statsigDataset = step.statsigDataset;
       this.task = task;
     }
 
@@ -614,6 +696,18 @@ public final class Eval<I, O, E> {
     }
 
     /**
+     * The name or ID of the Statsig eval dataset the data came from, sent with the run. The console
+     * compares runs on the same dataset row by row, so every record then needs the ID of its row,
+     * from {@link EvalDataRecord#withRowID(String)}, and no two records may share one; the run
+     * fails before any task runs otherwise. Defaults to the dataset's name with {@link
+     * Eval#builder(String, StatsigDataset)}, and to none otherwise.
+     */
+    public Builder<I, O, E> dataset(String dataset) {
+      this.dataset = dataset;
+      return this;
+    }
+
+    /**
      * Computes summary scores, such as a pass rate, from the finished results. They are returned in
      * {@link EvalResult#getSummaryScores()} and sent with the run. If it throws, the run has no
      * summary scores and a warning is logged.
@@ -642,6 +736,12 @@ public final class Eval<I, O, E> {
     // The send_results URL, without the eval name. For tests.
     Builder<I, O, E> endpoint(String endpoint) {
       this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
+      return this;
+    }
+
+    // The eval_datasets URL, without the dataset name. For tests.
+    Builder<I, O, E> datasetEndpoint(String datasetEndpoint) {
+      this.datasetEndpoint = Objects.requireNonNull(datasetEndpoint, "datasetEndpoint");
       return this;
     }
 
