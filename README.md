@@ -48,6 +48,25 @@ ai.logEvalGrade(
     new AIEvalGradeData("session-123"));
 ```
 
+### Agent configs
+
+`getAgentConfig` returns an agent's live version and its candidates for a user, from the agent's `agent:<name>` parameter store. Each version is a DAG of prompts, and `getRoot()` returns its root prompt as a `PromptVersion`. The live version's root prompt is live for the user, and the candidates' aren't, so `logEvalGrade` records the right `is_live`.
+
+```java
+import com.statsig.ai.agents.AgentConfig;
+import com.statsig.ai.agents.AgentVersion;
+
+AgentConfig agent = ai.getAgentConfig(user, "support_agent");
+PromptVersion root = agent.getLive().getRoot();
+String model = root.getModel("gpt-4o-mini");
+
+for (AgentVersion candidate : agent.getCandidates()) {
+  System.out.println(candidate.getRoot().getName());
+}
+```
+
+For an agent that doesn't exist, the live version's root prompt is empty and there are no candidates.
+
 ## Instrumentation (early preview)
 
 The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records each `chat().completions().create(...)` call as an OpenTelemetry span. Spans have the same names and attributes as the Node SDK's: the span is named `<operation> <model>`, such as `chat gpt-4o`, with `gen_ai.operation.name`, `gen_ai.provider.name`, the request settings, token usage, and `statsig.gen_ai.server.time_to_first_token_ms`. Messages use the [OpenTelemetry GenAI format](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/), `{role, parts}`.
