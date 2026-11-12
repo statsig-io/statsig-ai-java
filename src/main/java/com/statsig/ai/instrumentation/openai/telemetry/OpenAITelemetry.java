@@ -1,5 +1,6 @@
 package com.statsig.ai.instrumentation.openai.telemetry;
 
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
 import com.statsig.ai.trace.SpanTelemetry;
 import com.statsig.ai.trace.StatsigContextUtils;
 import com.statsig.ai.trace.StatsigTraceConventions;
@@ -13,13 +14,15 @@ public final class OpenAITelemetry {
 
   private final Tracer tracer =
       OtelSingleton.getTracerProviderStatic().get("com.statsig.ai.instrumentation.openai");
+  private final OpenAIWrapperConfig config;
   private final SpanTelemetry.SpanEventLogger eventLogger;
 
-  public OpenAITelemetry() {
-    this(SpanTelemetry.statsigEventLogger());
+  public OpenAITelemetry(OpenAIWrapperConfig config) {
+    this(config, SpanTelemetry.statsigEventLogger());
   }
 
-  OpenAITelemetry(SpanTelemetry.SpanEventLogger eventLogger) {
+  OpenAITelemetry(OpenAIWrapperConfig config, SpanTelemetry.SpanEventLogger eventLogger) {
+    this.config = config == null ? OpenAIWrapperConfig.builder().build() : config;
     this.eventLogger = eventLogger;
   }
 
@@ -35,8 +38,10 @@ public final class OpenAITelemetry {
 
     Span span = tracer.spanBuilder(name).setParent(ctx).setSpanKind(SpanKind.CLIENT).startSpan();
 
-    SpanTelemetry telemetry =
-        new SpanTelemetry(span, name, SpanTelemetry.DEFAULT_MAX_JSON_CHARS, eventLogger);
+    SpanTelemetry telemetry = new SpanTelemetry(span, name, config.getMaxJsonChars(), eventLogger);
+
+    // First, so the wrapper's own attributes win when a key is the same, as in Node.
+    setAttributes(telemetry, config.getCustomAttributes());
 
     telemetry.setAttribute(
         StatsigTraceConventions.ATTR_SPAN_TYPE, StatsigTraceConventions.SPAN_TYPE_GEN_AI);
@@ -66,8 +71,8 @@ public final class OpenAITelemetry {
     }
   }
 
-  private static void setAttributes(SpanTelemetry telemetry, Map<String, String> attrs) {
-    for (Map.Entry<String, String> entry : attrs.entrySet()) {
+  private static void setAttributes(SpanTelemetry telemetry, Map<String, ?> attrs) {
+    for (Map.Entry<String, ?> entry : attrs.entrySet()) {
       telemetry.setAttribute(entry.getKey(), entry.getValue());
     }
   }
