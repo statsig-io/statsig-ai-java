@@ -59,7 +59,7 @@ public class PromptTargetingTest {
     StatsigUser user = new StatsigUser.Builder().setUserID("test-user").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test-prompt-1");
-    PromptConfig liveVersion = prompt.getLivePrompt();
+    PromptVersion liveVersion = prompt.getLive();
 
     assertNotNull("Expected live prompt to be resolved", liveVersion);
     assertEquals("test-prompt-2", prompt.getName());
@@ -88,7 +88,7 @@ public class PromptTargetingTest {
     StatsigUser user = new StatsigUser.Builder().setUserID("test-user-1").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test-prompt-1");
-    PromptConfig liveVersion = prompt.getLivePrompt();
+    PromptVersion liveVersion = prompt.getLive();
 
     assertNotNull("Expected live prompt to be resolved", liveVersion);
     assertEquals("test-prompt-3", prompt.getName());
@@ -121,10 +121,10 @@ public class PromptTargetingTest {
     System.setErr(new PrintStream(errContent));
 
     Prompt prompt = null;
-    PromptConfig liveVersion = null;
+    PromptVersion liveVersion = null;
     try {
       prompt = statsigAI.getPrompt(user, "test-prompt-circular-a");
-      liveVersion = prompt.getLivePrompt();
+      liveVersion = prompt.getLive();
     } finally {
       System.setErr(originalErr);
     }

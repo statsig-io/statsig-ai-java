@@ -32,43 +32,337 @@ StatsigAI ai =
 
 StatsigUser user = new StatsigUser.Builder().setUserID("whd").build();
 Prompt prompt = ai.getPrompt(user, "support_prompt");
-String systemMessage = prompt.getLivePrompt().getWorkflowBody().get("value").toString();
+String systemMessage = prompt.getLive().getWorkflowBody().get("value").toString();
 ```
+
+`newShared` keeps an existing shared instance: a second call logs a warning and returns an invalid instance that makes no network calls. To create another shared instance, call `StatsigAI.removeSharedInstance()` first. It doesn't shut the old instance down.
 
 ### Logging evaluation grades
 
 ```java
 ai.logEvalGrade(
     user,
-    prompt.getLivePrompt(),
+    prompt.getLive(),
     /* score */ 0.9,
     /* grader */ "auto_rater",
     new AIEvalGradeData("session-123"));
 ```
 
-### Prompt context helpers
+### Agent configs
 
-`Prompt.withLive(...)` and `Prompt.withContext(...)` automatically push prompt and user metadata into the OpenTelemetry context. Use them when calling downstream LLM clients so future instrumentation can enrich spans with prompt identifiers.
+`getAgentConfig` returns an agent's live version and its candidates for a user, from the agent's `agent:<name>` parameter store. Each version is a DAG of prompts, and `getRoot()` returns its root prompt as a `PromptVersion`. The live version's root prompt is live for the user, and the candidates' aren't, so `logEvalGrade` records the right `is_live`.
 
 ```java
-prompt.withLive(live -> {
-  // Context.current() now includes statsig.llm.prompt_name/version and user identifiers
-  // call OpenAI, VertexAI, etc.
-  return null;
-});
+import com.statsig.ai.agents.AgentConfig;
+import com.statsig.ai.agents.AgentVersion;
+
+AgentConfig agent = ai.getAgentConfig(user, "support_agent");
+PromptVersion root = agent.getLive().getRoot();
+String model = root.getModel("gpt-4o-mini");
+
+for (AgentVersion candidate : agent.getCandidates()) {
+  System.out.println(candidate.getRoot().getName());
+}
 ```
+
+For an agent that doesn't exist, the live version's root prompt is empty and there are no candidates.
 
 ## Instrumentation (early preview)
 
-The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIInstrumentals.wrap`, currently performs basic validation and will add tracing/exporting logic in upcoming releases.
+The package `com.statsig.ai.instrumentation` will eventually host ready-to-use wrappers for popular AI SDKs. The first entry point, `OpenAIWrapper.wrap`, records these OpenAI calls as OpenTelemetry spans, on both the blocking and the async client:
+
+| Call | Operation |
+| --- | --- |
+| `chat().completions().create(...)` and `createStreaming(...)` | `chat` |
+| `completions().create(...)` and `createStreaming(...)` | `text_completion` |
+| `embeddings().create(...)` | `embeddings` |
+| `images().generate(...)` | `generate_content` |
+| `responses().create(...)` and `createStreaming(...)`, including structured outputs | `generate_content` |
+
+A streaming call's span records the time to the first chunk, rebuilds the response from the chunks, and ends when you've read the stream to the end or closed it. An async call's span ends when its future completes. Other calls are passed through untraced.
+
+Spans have the same names and attributes as the Node SDK's: the span is named `<operation> <model>`, such as `chat gpt-4o`, with `gen_ai.operation.name`, `gen_ai.provider.name`, the request settings, token usage, and `statsig.gen_ai.server.time_to_first_token_ms`. Messages use the [OpenTelemetry GenAI format](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/), `{role, parts}`.
 
 ```java
 import com.openai.client.OpenAIClient;
+import com.openai.client.OpenAIClientAsync;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.statsig.ai.instrumentation.openai.OpenAIInstrumentals;
+import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapper;
 
 OpenAIClient rawClient = OpenAIOkHttpClient.fromEnv();
-OpenAIClient wrapped = OpenAIInstrumentals.wrap(rawClient);
+OpenAIClient wrapped = OpenAIWrapper.wrap(rawClient);
+
+// Async: wrap an OpenAIClientAsync, or call wrapped.async().
+OpenAIClientAsync wrappedAsync = OpenAIWrapper.wrap(OpenAIOkHttpClientAsync.fromEnv());
+```
+
+### Gemini
+
+`GeminiWrapper.wrap` traces `models.generateContent(...)` and `generateContentStream(...)` calls from the [Google Gen AI Java SDK](https://github.com/googleapis/java-genai), with `gen_ai.provider.name` `gcp.gen_ai`. It takes the same `OpenAIWrapperConfig` as `OpenAIWrapper` (see "Capturing message content" below), so message content is captured only when you opt in. Thinking tokens count toward output tokens, and cached input tokens come from `cachedContentTokenCount`. A streaming call's span joins the chunks into one response.
+
+The Java `Client` and its `models` are final classes, so they can't be wrapped in place. `wrap` returns a `GeminiModels` with the same `generateContent` and `generateContentStream` methods: call those instead of `client.models`. `generateContentStream` returns a `GeminiResponseStream`, which you iterate and close like a `ResponseStream`. `async()` traces `client.async.models` the same way, and `getModels()` returns `client.models` for other calls.
+
+The Gen AI SDK isn't a dependency of this SDK, so add `com.google.genai:google-genai` to your app to use it.
+
+```java
+import com.google.genai.Client;
+import com.google.genai.types.GenerateContentResponse;
+import com.statsig.ai.instrumentation.gemini.GeminiModels;
+import com.statsig.ai.instrumentation.gemini.GeminiWrapper;
+
+GeminiModels gemini = GeminiWrapper.wrap(new Client());
+GenerateContentResponse response = gemini.generateContent("gemini-2.5-flash", input, null);
+```
+
+### Capturing message content
+
+Messages usually hold user input and model output, so by default spans don't record them. To record them, pass an `OpenAIWrapperConfig` with `GenAICaptureOptions`:
+
+| Option | Records |
+| --- | --- |
+| `captureInputMessages` | `gen_ai.input.messages` |
+| `captureOutputMessages` | `gen_ai.output.messages` |
+| `captureSystemInstructions` | `gen_ai.system_instructions` |
+| `captureToolDefinitions` | `gen_ai.tool.definitions` |
+| `captureAll` | all four |
+
+```java
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
+import java.util.Collections;
+
+OpenAIClient wrapped =
+    OpenAIWrapper.wrap(
+        rawClient,
+        OpenAIWrapperConfig.builder()
+            .setCaptureOptions(
+                GenAICaptureOptions.builder()
+                    .captureInputMessages(true)
+                    .captureOutputMessages(true)
+                    .build())
+            .setCustomAttributes(Collections.singletonMap("app.team", "support"))
+            .build());
+```
+
+`setCustomAttributes` adds your own attributes to every model call span; the wrapper's attributes win when a key is the same. JSON attributes, such as the messages, are truncated after `setMaxJsonChars` characters (40,000 by default), and `<key>_len` records each one's full length.
+
+### Anthropic
+
+`AnthropicWrapper.wrap` records `messages().create(...)` and `createStreaming(...)` calls from the [Anthropic Java SDK](https://github.com/anthropics/anthropic-sdk-java) the same way, with `gen_ai.provider.name` `anthropic`, on the blocking and the async client. It takes the same `OpenAIWrapperConfig`, so message content is captured only when you opt in. Cache reads and writes count toward input tokens, and cache reads are also recorded as `statsig.gen_ai.usage.input_cached_tokens`. A streaming call's span rebuilds the final message from the stream's events.
+
+The Anthropic SDK isn't a dependency of this SDK, so add `com.anthropic:anthropic-java` to your app to use it.
+
+```java
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.statsig.ai.instrumentation.anthropic.AnthropicWrapper;
+
+AnthropicClient anthropic = AnthropicWrapper.wrap(AnthropicOkHttpClient.fromEnv());
+```
+
+### Tagging calls with a prompt version
+
+Run the code that sends a prompt inside `prompt.withLive(...)`, or `prompt.withVersion(version, ...)` for a Candidate. Model call spans from `OpenAIWrapper` inside it, and their `statsig::gen_ai` events, get `statsig.llm.prompt_name`, `statsig.llm.prompt_version` and `statsig.llm.prompt_version_id`, which Statsig uses to attribute online eval grades to a version. Both also put the prompt's user in context, like `withStatsigUserContext`.
+
+```java
+import com.openai.models.chat.completions.ChatCompletion;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.statsig.ai.PromptVersion;
+
+Prompt prompt = ai.getPrompt(user, "support_bot");
+PromptVersion live = prompt.getLive();
+
+// openai is a client from OpenAIWrapper.wrap.
+ChatCompletion completion =
+    prompt.withLive(
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(live.getModel())
+                        .addUserMessage(input)
+                        .build()));
+
+// Try a Candidate on the same input.
+PromptVersion candidate = prompt.getCandidates()[0];
+ChatCompletion candidateCompletion =
+    prompt.withVersion(
+        candidate,
+        () ->
+            openai
+                .chat()
+                .completions()
+                .create(
+                    ChatCompletionCreateParams.builder()
+                        .model(candidate.getModel())
+                        .addUserMessage(input)
+                        .build()));
+```
+
+An inner `withVersion` replaces the outer version. `prompt.withContext(...)` sets only the prompt name and the user, for code that runs before a version is chosen, and keeps any version already in context.
+
+### Rendering prompts
+
+`getPromptMessages` renders a version's messages with your template variables, using [Mustache](https://mustache.github.io/mustache.5.html) like the Node SDK. Values aren't HTML-escaped, sections and loops work, and a missing variable renders as an empty string. `getValue(key, fallback)` reads any other value from the version, and returns the fallback when the value is missing or a different type.
+
+```java
+import com.statsig.ai.PromptMessage;
+import java.util.Collections;
+import java.util.List;
+
+List<PromptMessage> messages =
+    prompt.withLive(
+        () -> {
+          List<PromptMessage> rendered =
+              live.getPromptMessages(Collections.singletonMap("input", input));
+          // Pass rendered.get(i).getRole() and getContent() to your model client.
+          return rendered;
+        });
+```
+
+Inside `withLive` or `withVersion` for the same version, rendering records the variables as `statsig.llm.prompt_template_variables`. Workflow spans from `wrap` and `startWorkflow` always get them. Template variables usually hold user input, so model call spans get them only when `captureInputMessages` (or `captureAll`) is set. Rendering a different version inside the scope records nothing.
+
+## Tracing
+
+`Otel.initialize` sets up a tracer provider that exports spans to Statsig.
+
+```java
+import com.statsig.ai.trace.Otel;
+import com.statsig.ai.trace.options.InitializeTracingOptions;
+import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
+
+Otel.initialize(
+    InitializeTracingOptions.builder()
+        .setExporterOptions(new StatsigOTLPTraceExporterOptions("your-server-sdk-key"))
+        .setServiceName("support-bot")
+        .setVersion("1.4.0")
+        .setEnvironment("production")
+        .build());
+```
+
+- `setServiceName` and `setVersion` are recorded on the tracer provider's resource as `service.name` and `service.version`, and on each `statsig::gen_ai` event as the `service` and `version` custom IDs. Without a service name, the `OTEL_SERVICE_NAME` environment variable is used, then `SERVICE_NAME`.
+- The tracer provider isn't registered as the global OpenTelemetry, so it doesn't replace your app's own. To export spans from other instrumentation that uses `GlobalOpenTelemetry` too, call `setEnableGlobalTraceProviderRegistration(true)`.
+
+The context helpers below are static methods on `com.statsig.ai.trace.StatsigContextUtils`. Each one runs a `Supplier` and returns its result, or runs a `Runnable`. The overloads that take a `Context` return the new context instead, for code that manages its own scopes.
+
+### Statsig context
+
+Run code inside `withStatsigContext(user, activityID, ...)` to attribute the model calls it makes. Model call spans from `OpenAIWrapper`, and their `statsig::gen_ai` events, get `statsig.user_id` and `statsig.custom_ids` (the user's custom IDs as JSON). The activity ID is added to the custom IDs as `statsig.activity_id`. Pass a null user when there's only an activity ID.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigContext;
+
+ChatCompletion completion =
+    withStatsigContext(user, "conversation-123", () -> openai.chat().completions().create(params));
+```
+
+To tag every span with the user, not only model calls, run the code inside `withStatsigUserContext(user, ...)`. The span processor that `Otel.initialize` installs adds `statsig.user_id` and `statsig.custom_ids` to each span started inside it. `Prompt.withLive(...)`, `Prompt.withVersion(...)` and `Prompt.withContext(...)` do the same for the prompt's user.
+
+### Marking the environment
+
+The `environment` option of `InitializeTracingOptions` is recorded on the resource as `deployment.environment.name` and `env`. To tag only some spans, for example evals running in the same process as production code, run that code inside `withStatsigEnvironment`. Spans started inside it get a `statsig.environment` attribute, which overrides the resource value for those spans.
+
+Use `production` for live traffic. `eval` and `online_eval_judge` are reserved for spans Statsig generates.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigEnvironment;
+
+withStatsigEnvironment("staging_canary", () -> handleRequest(request));
+```
+
+### Workflow and tool spans
+
+`GenAISpans.wrap` records a span each time the wrapped code runs, so the model calls it makes appear as its children in the trace. Use an `invoke_workflow` span for an agent turn and an `execute_tool` span for each tool call. Build the options with `WrapOptions.workflow(name)` or `WrapOptions.tool(name)`. `setUser` and `setActivityID` run the span in a Statsig context, like `withStatsigContext`, and `setAttribute` adds your own attributes.
+
+```java
+import static com.statsig.ai.trace.GenAISpans.wrap;
+
+import com.statsig.ai.trace.options.WrapOptions;
+import java.util.List;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+Function<String, List<Doc>> searchDocs =
+    wrap(
+        WrapOptions.tool("search_docs").setToolType("retrieval").build(),
+        (String query) -> docIndex.search(query));
+
+Supplier<ChatCompletion> supportTurn =
+    wrap(
+        WrapOptions.workflow("support_turn").setUser(user).setActivityID(conversationID).build(),
+        () -> {
+          List<Doc> docs = searchDocs.apply(input);
+          return openai.chat().completions().create(buildParams(docs, input));
+        });
+
+ChatCompletion completion = prompt.withLive(supportTurn);
+```
+
+`wrap` takes a `Supplier`, `Function` or `Runnable` and returns the same type. `wrapCallable` takes a `Callable` and re-throws its checked exceptions unchanged. Each call records one span with `statsig.span.type=gen_ai`, `statsig.span.gen_ai.type` (`workflow` or `tool`), the name as `statsig.gen_ai.workflow.name` or `statsig.gen_ai.tool.name`, and the tool type as `gen_ai.tool.type`. Like model call spans, it gets the user, environment and prompt version from the context, and logs a `statsig::gen_ai` event. A span whose code throws is marked ERROR, and the exception is re-thrown. When the code returns a `CompletableFuture`, the span ends when the future completes, and `wrap` returns a future that completes with the same result after the span has ended, so you can `join()` it and then flush. Other `CompletionStage` types are returned as they are.
+
+`startWorkflow` runs its body right away in a workflow span, and returns the result. `startWorkflowCallable` does the same for a `Callable`.
+
+```java
+import static com.statsig.ai.trace.GenAISpans.startWorkflow;
+
+String answer = startWorkflow("support_turn", () -> runAgent(input));
+
+startWorkflow(
+    WrapOptions.workflow("nightly_digest").setUser(user).setAttribute("digest.size", 20).build(),
+    () -> sendDigest(user));
+```
+
+`statsig.span.llm_root=1` marks the span that stands for a whole LLM interaction:
+
+- A model call from `OpenAIWrapper` is the root when there's no workflow around it, including inside a tool span on its own.
+- A model call inside a workflow span from `wrap` isn't, since the workflow stands for the whole turn. The `wrap` workflow span isn't marked either.
+- `startWorkflow` marks its own span as the root, and the model calls inside it aren't.
+
+### Joining a Statsig eval trace
+
+A workflow eval sends each dataset row to your endpoint as a POST request. To show your agent's tool and model calls under the eval row in the trace drawer, run the handler inside `withIncomingTraceContext`. It reads the W3C `traceparent` and `tracestate` request headers, so spans started inside it become children of the eval row's span. Pass the headers as a `Map<String, String>` (names are matched case-insensitively) or as a header getter such as a servlet request's `getHeader`. If there's no valid `traceparent`, the handler runs as usual.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withIncomingTraceContext;
+
+// Servlet
+@Override
+protected void doPost(HttpServletRequest request, HttpServletResponse response)
+    throws IOException {
+  String input = request.getReader().lines().collect(Collectors.joining("\n"));
+  String output = withIncomingTraceContext(request::getHeader, () -> runAgent(input));
+  response.getWriter().write(output);
+}
+
+// Spring
+@PostMapping("/agent")
+public AgentResponse agent(@RequestHeader HttpHeaders headers, @RequestBody AgentRequest body) {
+  return withIncomingTraceContext(headers::getFirst, () -> runAgent(body));
+}
+```
+
+If your server already uses OpenTelemetry HTTP instrumentation, such as the OpenTelemetry Java agent, its spans join the trace on their own. The helper keeps the current span when it's already in the incoming trace, so using both is safe.
+
+What Statsig sends: workflow eval requests carry `Content-Type: application/json`, the headers you configured for the workflow, and two headers of their own. `traceparent` names the eval row's root span, and `x-statsig-eval-run` holds the eval run ID. A header you configure with the same name wins, matched case-insensitively. Test Connection doesn't send either header.
+
+Spans from your endpoint get your app's environment, so eval requests land with your production traces, where online evals can grade them. To keep them out, check for `x-statsig-eval-run` and run the handler inside `withStatsigEnvironment("eval", ...)`. You can use the same check to skip side effects.
+
+```java
+import static com.statsig.ai.trace.StatsigContextUtils.withIncomingTraceContext;
+import static com.statsig.ai.trace.StatsigContextUtils.withStatsigEnvironment;
+
+@PostMapping("/agent")
+public AgentResponse agent(@RequestHeader HttpHeaders headers, @RequestBody AgentRequest body) {
+  return withIncomingTraceContext(
+      headers::getFirst,
+      () ->
+          headers.getFirst("x-statsig-eval-run") != null
+              ? withStatsigEnvironment("eval", () -> runAgent(body))
+              : runAgent(body));
+}
 ```
 
 ## Offline evals

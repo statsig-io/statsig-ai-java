@@ -9,8 +9,12 @@ public final class UserContext {
   private final String userID;
   private final Map<String, String> customIDs;
 
+  /**
+   * @param userID the user ID; null or empty is recorded as {@code "unknown"}
+   * @param customIDs the custom IDs; null is recorded as empty
+   */
   public UserContext(String userID, Map<String, String> customIDs) {
-    this.userID = userID != null ? userID : "unknown";
+    this.userID = userID != null && !userID.isEmpty() ? userID : "unknown";
     this.customIDs =
         customIDs != null ? Collections.unmodifiableMap(customIDs) : Collections.emptyMap();
   }

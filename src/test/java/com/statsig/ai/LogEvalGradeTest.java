@@ -86,7 +86,7 @@ public class LogEvalGradeTest {
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test_prompt");
-    PromptConfig livePrompt = prompt.getLivePrompt();
+    PromptVersion livePrompt = prompt.getLive();
 
     statsigAI.logEvalGrade(user, livePrompt, 0.8, "grader_123", new AIEvalGradeData("session-abc"));
 
@@ -114,8 +114,8 @@ public class LogEvalGradeTest {
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
 
     Prompt prompt = statsigAI.getPrompt(user, "test_prompt");
-    assertTrue(prompt.getLivePrompt().isLiveForUser());
-    PromptConfig candidate = prompt.getCandidatePrompts()[0];
+    assertTrue(prompt.getLive().isLiveForUser());
+    PromptVersion candidate = prompt.getCandidates()[0];
     assertFalse(candidate.isLiveForUser());
 
     statsigAI.logEvalGrade(user, candidate, 0.5, "grader_123", new AIEvalGradeData("session-abc"));
@@ -128,7 +128,7 @@ public class LogEvalGradeTest {
   @Test
   public void logEvalGradeUsesActiveSpanIds() throws Exception {
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
-    PromptConfig livePrompt = statsigAI.getPrompt(user, "test_prompt").getLivePrompt();
+    PromptVersion livePrompt = statsigAI.getPrompt(user, "test_prompt").getLive();
 
     Span span = tracer.spanBuilder("llm-call").startSpan();
     try (Scope ignored = span.makeCurrent()) {
@@ -145,7 +145,7 @@ public class LogEvalGradeTest {
   @Test
   public void logEvalGradePrefersPassedTraceIdsOverActiveSpan() throws Exception {
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
-    PromptConfig livePrompt = statsigAI.getPrompt(user, "test_prompt").getLivePrompt();
+    PromptVersion livePrompt = statsigAI.getPrompt(user, "test_prompt").getLive();
 
     AIEvalGradeData data = new AIEvalGradeData("s");
     data.setTraceID(TRACE_ID);
@@ -166,7 +166,7 @@ public class LogEvalGradeTest {
   @Test
   public void logEvalGradeIncludesReasoningAndMergesMetadata() throws Exception {
     StatsigUser user = new StatsigUser.Builder().setUserID("log_eval_user").build();
-    PromptConfig livePrompt = statsigAI.getPrompt(user, "test_prompt").getLivePrompt();
+    PromptVersion livePrompt = statsigAI.getPrompt(user, "test_prompt").getLive();
 
     Map<String, String> extra = new HashMap<>();
     extra.put("judge_model", "gpt-4o-mini");
@@ -193,7 +193,7 @@ public class LogEvalGradeTest {
     customIDs.put("companyID", "company-1");
     StatsigUser user =
         new StatsigUser.Builder().setUserID("log_eval_user").setCustomIDs(customIDs).build();
-    PromptConfig livePrompt = statsigAI.getPrompt(user, "test_prompt").getLivePrompt();
+    PromptVersion livePrompt = statsigAI.getPrompt(user, "test_prompt").getLive();
 
     AIEvalGradeData data = new AIEvalGradeData("s");
     data.setActivityID("activity-42");

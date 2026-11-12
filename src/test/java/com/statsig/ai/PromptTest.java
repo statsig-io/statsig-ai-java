@@ -17,29 +17,29 @@ public class PromptTest {
 
   @Test
   public void promptVariantIsHydratedFromSingleConfig() throws Exception {
-    JSONObject payload = loadPromptConfig();
-    PromptConfig variant = new PromptConfig(toDynamicConfig(payload));
+    JSONObject payload = loadPromptPayload();
+    PromptVersion variant = new PromptVersion(toDynamicConfig(payload));
 
     StatsigUser user = new StatsigUser();
-    Prompt prompt = new Prompt(variant.getPromptName(), variant, new PromptConfig[0], user);
+    Prompt prompt = new Prompt(variant.getPromptName(), variant, new PromptVersion[0], user);
 
     assertEquals("test_prompt", prompt.getName());
-    assertEquals("Version 2", prompt.getLivePrompt().getName());
-    assertEquals("7jszgFEAi1KRA2Tot6qikg", prompt.getLivePrompt().getId());
-    assertEquals(0, prompt.getCandidatePrompts().length);
-    assertEquals("openai", prompt.getLivePrompt().getProvider());
-    assertEquals("gpt-5", prompt.getLivePrompt().getModel());
-    assertEquals("gpt-4o-mini", prompt.getLivePrompt().getEvalModel());
-    assertEquals(1.0, prompt.getLivePrompt().getTemperature(), 0.0);
-    assertEquals(1000, prompt.getLivePrompt().getMaxTokens());
-    assertEquals("JSON", prompt.getLivePrompt().getWorkflowBody().get("type"));
-    assertEquals("{}", prompt.getLivePrompt().getWorkflowBody().get("value"));
+    assertEquals("Version 2", prompt.getLive().getName());
+    assertEquals("7jszgFEAi1KRA2Tot6qikg", prompt.getLive().getId());
+    assertEquals(0, prompt.getCandidates().length);
+    assertEquals("openai", prompt.getLive().getProvider());
+    assertEquals("gpt-5", prompt.getLive().getModel());
+    assertEquals("gpt-4o-mini", prompt.getLive().getEvalModel());
+    assertEquals(1.0, prompt.getLive().getTemperature(), 0.0);
+    assertEquals(1000, prompt.getLive().getMaxTokens());
+    assertEquals("JSON", prompt.getLive().getWorkflowBody().get("type"));
+    assertEquals("{}", prompt.getLive().getWorkflowBody().get("value"));
   }
 
   @Test
   public void fallbackGettersReturnProvidedDefaults() {
     DynamicConfig emptyConfig = newDynamicConfig("prompt:empty", new HashMap<>(), "userID");
-    PromptConfig variant = new PromptConfig(emptyConfig);
+    PromptVersion variant = new PromptVersion(emptyConfig);
 
     assertEquals(0.0, variant.getTemperature(), 0.0);
     assertEquals(0.75, variant.getTemperature(0.75), 0.0);
@@ -62,7 +62,7 @@ public class PromptTest {
     assertEquals("default-eval", variant.getEvalModel("default-eval"));
   }
 
-  private static JSONObject loadPromptConfig() throws IOException {
+  private static JSONObject loadPromptPayload() throws IOException {
     String json = TestUtils.readResource("/prompt.json");
     return JSON.parseObject(json);
   }

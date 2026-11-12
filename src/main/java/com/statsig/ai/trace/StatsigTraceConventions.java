@@ -20,17 +20,29 @@ public final class StatsigTraceConventions {
 
   public static final String ATTR_LLM_PROMPT_NAME = "statsig.llm.prompt_name";
   public static final String ATTR_LLM_PROMPT_VERSION = "statsig.llm.prompt_version";
+  public static final String ATTR_LLM_PROMPT_VERSION_ID = "statsig.llm.prompt_version_id";
+  public static final String ATTR_LLM_PROMPT_TEMPLATE_VARIABLES =
+      "statsig.llm.prompt_template_variables";
 
   public static final String ATTR_USER_ID = "statsig.user_id";
   public static final String ATTR_CUSTOM_IDS = "statsig.custom_ids";
   public static final String ATTR_ACTIVITY_ID = "statsig.activity_id";
+  public static final String ATTR_ENVIRONMENT = "statsig.environment";
+  // Incubating in the OpenTelemetry semantic conventions, so copied here.
+  public static final String ATTR_DEPLOYMENT_ENVIRONMENT_NAME = "deployment.environment.name";
 
   public static final ContextKey<String> CTX_ACTIVE_PROMPT =
       ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT");
   public static final ContextKey<String> CTX_ACTIVE_PROMPT_VERSION =
       ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT_VERSION");
+  public static final ContextKey<String> CTX_ACTIVE_PROMPT_VERSION_ID =
+      ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT_VERSION_ID");
   public static final ContextKey<UserContext> CTX_ACTIVE_USER =
       ContextKey.named("STATSIG_CTX_ACTIVE_USER");
+  public static final ContextKey<StatsigContextItem> CTX_ACTIVE_CONTEXT =
+      ContextKey.named("STATSIG_CTX_ACTIVE_CONTEXT");
+  public static final ContextKey<String> CTX_ACTIVE_ENVIRONMENT =
+      ContextKey.named("STATSIG_CTX_ACTIVE_ENVIRONMENT");
   public static final ContextKey<String> CTX_GEN_AI_ROOT =
       ContextKey.named("STATSIG_CTX_GEN_AI_ROOT");
 }
