@@ -21,6 +21,8 @@ public final class StatsigTraceConventions {
   public static final String ATTR_LLM_PROMPT_NAME = "statsig.llm.prompt_name";
   public static final String ATTR_LLM_PROMPT_VERSION = "statsig.llm.prompt_version";
   public static final String ATTR_LLM_PROMPT_VERSION_ID = "statsig.llm.prompt_version_id";
+  public static final String ATTR_LLM_PROMPT_TEMPLATE_VARIABLES =
+      "statsig.llm.prompt_template_variables";
 
   public static final String ATTR_USER_ID = "statsig.user_id";
   public static final String ATTR_CUSTOM_IDS = "statsig.custom_ids";

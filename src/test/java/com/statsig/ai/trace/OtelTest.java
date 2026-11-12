@@ -2,15 +2,24 @@ package com.statsig.ai.trace;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 
 import com.statsig.StatsigUser;
 import com.statsig.ai.trace.options.InitializeTracingOptions;
+import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
+import com.statsig.ai.trace.singleton.OtelSingleton;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import java.lang.reflect.Field;
 import java.util.concurrent.TimeUnit;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 public class OtelTest {
@@ -18,6 +27,17 @@ public class OtelTest {
       AttributeKey.stringKey("deployment.environment.name");
   private static final AttributeKey<String> ENV = AttributeKey.stringKey("env");
   private static final AttributeKey<String> SERVICE_NAME = AttributeKey.stringKey("service.name");
+  private static final AttributeKey<String> SERVICE_VERSION =
+      AttributeKey.stringKey("service.version");
+
+  @Before
+  @After
+  public void reset() throws Exception {
+    GlobalOpenTelemetry.resetForTest();
+    Field instanceField = OtelSingleton.class.getDeclaredField("instance");
+    instanceField.setAccessible(true);
+    instanceField.set(null, null);
+  }
 
   @Test
   public void resourceRecordsTheEnvironment() {
@@ -32,13 +52,70 @@ public class OtelTest {
   }
 
   @Test
-  public void resourceWithoutEnvironmentIsTheDefault() {
-    assertEquals(
-        Resource.getDefault(), Otel.buildResource(InitializeTracingOptions.builder().build()));
-    assertEquals(
-        Resource.getDefault(),
-        Otel.buildResource(InitializeTracingOptions.builder().setEnvironment("").build()));
-    assertEquals(Resource.getDefault(), Otel.buildResource(null));
+  public void resourceRecordsTheServiceNameAndVersion() {
+    Resource resource =
+        Otel.buildResource(
+            InitializeTracingOptions.builder()
+                .setServiceName("checkout")
+                .setVersion("1.2.3")
+                .setEnvironment("staging")
+                .build());
+
+    assertEquals("checkout", resource.getAttribute(SERVICE_NAME));
+    assertEquals("1.2.3", resource.getAttribute(SERVICE_VERSION));
+    assertEquals("staging", resource.getAttribute(DEPLOYMENT_ENVIRONMENT_NAME));
+  }
+
+  @Test
+  public void resourceServiceNameFallsBackToEnvironmentVariables() {
+    Resource resource =
+        Otel.buildResource(
+            StatsigResourceAttributes.create(
+                null, null, null, StatsigResourceAttributesTest.env(null, "from-service-name")));
+
+    assertEquals("from-service-name", resource.getAttribute(SERVICE_NAME));
+    assertNull(resource.getAttribute(SERVICE_VERSION));
+  }
+
+  @Test
+  public void resourceWithoutAttributesIsTheDefault() {
+    StatsigResourceAttributes none =
+        StatsigResourceAttributes.create(
+            null, null, "", StatsigResourceAttributesTest.env(null, null));
+    assertEquals(Resource.getDefault(), Otel.buildResource(none));
+  }
+
+  @Test
+  public void initializeDoesNotRegisterTheGlobalOpenTelemetryByDefault() {
+    OpenTelemetry openTelemetry =
+        Otel.initialize(
+            InitializeTracingOptions.builder()
+                .setExporterOptions(new StatsigOTLPTraceExporterOptions("secret-test"))
+                .setServiceName("checkout")
+                .build());
+    try {
+      // Nothing was registered, so the app can still set its own.
+      GlobalOpenTelemetry.set(OpenTelemetry.noop());
+      assertEquals("checkout", OtelSingleton.getResourceAttributesStatic().getService());
+    } finally {
+      ((OpenTelemetrySdk) openTelemetry).getSdkTracerProvider().shutdown();
+    }
+  }
+
+  @Test
+  public void initializeRegistersTheGlobalOpenTelemetryWhenAskedTo() {
+    OpenTelemetry openTelemetry =
+        Otel.initialize(
+            InitializeTracingOptions.builder()
+                .setExporterOptions(new StatsigOTLPTraceExporterOptions("secret-test"))
+                .setEnableGlobalTraceProviderRegistration(true)
+                .build());
+    try {
+      assertThrows(
+          IllegalStateException.class, () -> GlobalOpenTelemetry.set(OpenTelemetry.noop()));
+    } finally {
+      ((OpenTelemetrySdk) openTelemetry).getSdkTracerProvider().shutdown();
+    }
   }
 
   @Test

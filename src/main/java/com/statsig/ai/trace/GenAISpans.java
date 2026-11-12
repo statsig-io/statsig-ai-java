@@ -232,7 +232,8 @@ public final class GenAISpans {
       setAttributes(telemetry, StatsigContextUtils.getUserSpanAttrs(spanCtx));
       setAttributes(telemetry, StatsigContextUtils.getStatsigSpanAttrs(spanCtx));
       setAttributes(telemetry, StatsigContextUtils.getEnvironmentSpanAttrs(spanCtx));
-      setAttributes(telemetry, StatsigContextUtils.getPromptSpanAttrs(spanCtx));
+      // Workflow spans always get the template variables, as in Node; tool spans never do.
+      setAttributes(telemetry, StatsigContextUtils.getPromptSpanAttrs(spanCtx, isWorkflow));
       setTypeAttributes(telemetry, options, isWorkflow);
 
       T result = body.call();
@@ -246,7 +247,7 @@ public final class GenAISpans {
                       } else {
                         telemetry.fail(unwrap(error));
                       }
-                      end(telemetry, spanCtx);
+                      end(telemetry, spanCtx, isWorkflow);
                     });
         // A plain CompletableFuture's chained future is a CompletableFuture too, so it can stand
         // in for the body's result. It completes after the span ends.
@@ -258,11 +259,11 @@ public final class GenAISpans {
         return result;
       }
       telemetry.setStatus(StatusCode.OK);
-      end(telemetry, spanCtx);
+      end(telemetry, spanCtx, isWorkflow);
       return result;
     } catch (Throwable t) {
       telemetry.fail(t);
-      end(telemetry, spanCtx);
+      end(telemetry, spanCtx, isWorkflow);
       throw t;
     }
   }
@@ -283,9 +284,9 @@ public final class GenAISpans {
     }
   }
 
-  private static void end(SpanTelemetry telemetry, Context spanCtx) {
-    // Read again, like Node, which records the prompt template variables rendered inside the span.
-    setAttributes(telemetry, StatsigContextUtils.getPromptSpanAttrs(spanCtx));
+  private static void end(SpanTelemetry telemetry, Context spanCtx, boolean isWorkflow) {
+    // Read again, like Node, to record the prompt template variables rendered inside the span.
+    setAttributes(telemetry, StatsigContextUtils.getPromptSpanAttrs(spanCtx, isWorkflow));
     telemetry.end(spanCtx);
   }
 
