@@ -66,7 +66,8 @@ public class EvalTraceTest {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   private static final String WORKFLOW_SPAN = "invoke_workflow";
-  private static final String MODEL_SPAN = "openai.chat.completions";
+  // Model call spans are named "<operation> <model>", and the mocked params have no model.
+  private static final String MODEL_SPAN = "chat unknown";
   private static final AttributeKey<String> SPAN_TYPE = AttributeKey.stringKey("statsig.span.type");
   private static final AttributeKey<String> GEN_AI_SPAN_TYPE =
       AttributeKey.stringKey("statsig.span.gen_ai.type");
