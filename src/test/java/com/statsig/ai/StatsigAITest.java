@@ -37,6 +37,36 @@ public class StatsigAITest {
   }
 
   @Test
+  public void newSharedKeepsTheExistingSharedInstance() throws Exception {
+    StatsigAI first = StatsigAI.newShared(attached("secret-core")).get(1, TimeUnit.SECONDS);
+
+    StatsigAI second = StatsigAI.newShared(attached("secret-other")).get(1, TimeUnit.SECONDS);
+
+    assertSame(first, StatsigAI.shared());
+    // Like Node, the second call returns an invalid instance rather than replacing the first.
+    assertNotNull(second);
+    assertNotSame(first, second);
+    assertNotNull(second.getStatsig());
+  }
+
+  @Test
+  public void removeSharedInstanceAllowsANewOne() throws Exception {
+    StatsigAI first = StatsigAI.newShared(attached("secret-core")).get(1, TimeUnit.SECONDS);
+
+    StatsigAI.removeSharedInstance();
+    assertFalse(StatsigAI.hasShared());
+
+    StatsigAI second = StatsigAI.newShared(attached("secret-other")).get(1, TimeUnit.SECONDS);
+    assertNotSame(first, second);
+    assertSame(second, StatsigAI.shared());
+  }
+
+  private static StatsigInitConfig.CoreAttached attached(String sdkKey) {
+    StatsigOptions coreOptions = new StatsigOptions.Builder().setDisableNetwork(true).build();
+    return StatsigInitConfig.coreAttached(new Statsig(sdkKey, coreOptions));
+  }
+
+  @Test
   public void constructorSupportsIndependentInstances() throws Exception {
     StatsigOptions optionsA = new StatsigOptions.Builder().setDisableNetwork(true).build();
     StatsigOptions optionsB = new StatsigOptions.Builder().setDisableNetwork(true).build();

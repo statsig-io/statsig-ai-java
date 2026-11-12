@@ -73,7 +73,10 @@ public final class GenAITelemetry {
           StatsigTraceConventions.ATTR_SPAN_LLM_ROOT, StatsigTraceConventions.SPAN_LLM_ROOT_VALUE);
     }
     // The prompt version, Statsig context and environment let the call be attributed and graded.
-    attributes.putAll(StatsigContextUtils.getPromptSpanAttrs(ctx));
+    // Template variables usually hold user input, so they follow the input message capture option.
+    attributes.putAll(
+        StatsigContextUtils.getPromptSpanAttrs(
+            ctx, config.getCaptureOptions().captureInputMessages()));
     attributes.putAll(StatsigContextUtils.getStatsigSpanAttrs(ctx));
     attributes.putAll(StatsigContextUtils.getEnvironmentSpanAttrs(ctx));
 

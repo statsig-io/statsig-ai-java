@@ -35,6 +35,8 @@ Prompt prompt = ai.getPrompt(user, "support_prompt");
 String systemMessage = prompt.getLive().getWorkflowBody().get("value").toString();
 ```
 
+`newShared` keeps an existing shared instance: a second call logs a warning and returns an invalid instance that makes no network calls. To create another shared instance, call `StatsigAI.removeSharedInstance()` first. It doesn't shut the old instance down.
+
 ### Logging evaluation grades
 
 ```java
@@ -45,6 +47,25 @@ ai.logEvalGrade(
     /* grader */ "auto_rater",
     new AIEvalGradeData("session-123"));
 ```
+
+### Agent configs
+
+`getAgentConfig` returns an agent's live version and its candidates for a user, from the agent's `agent:<name>` parameter store. Each version is a DAG of prompts, and `getRoot()` returns its root prompt as a `PromptVersion`. The live version's root prompt is live for the user, and the candidates' aren't, so `logEvalGrade` records the right `is_live`.
+
+```java
+import com.statsig.ai.agents.AgentConfig;
+import com.statsig.ai.agents.AgentVersion;
+
+AgentConfig agent = ai.getAgentConfig(user, "support_agent");
+PromptVersion root = agent.getLive().getRoot();
+String model = root.getModel("gpt-4o-mini");
+
+for (AgentVersion candidate : agent.getCandidates()) {
+  System.out.println(candidate.getRoot().getName());
+}
+```
+
+For an agent that doesn't exist, the live version's root prompt is empty and there are no candidates.
 
 ## Instrumentation (early preview)
 
@@ -165,11 +186,30 @@ ChatCompletion candidateCompletion =
 
 An inner `withVersion` replaces the outer version. `prompt.withContext(...)` sets only the prompt name and the user, for code that runs before a version is chosen, and keeps any version already in context.
 
-Template variables (`statsig.llm.prompt_template_variables`) aren't recorded yet, since the Java SDK doesn't render prompt templates.
+### Rendering prompts
+
+`getPromptMessages` renders a version's messages with your template variables, using [Mustache](https://mustache.github.io/mustache.5.html) like the Node SDK. Values aren't HTML-escaped, sections and loops work, and a missing variable renders as an empty string. `getValue(key, fallback)` reads any other value from the version, and returns the fallback when the value is missing or a different type.
+
+```java
+import com.statsig.ai.PromptMessage;
+import java.util.Collections;
+import java.util.List;
+
+List<PromptMessage> messages =
+    prompt.withLive(
+        () -> {
+          List<PromptMessage> rendered =
+              live.getPromptMessages(Collections.singletonMap("input", input));
+          // Pass rendered.get(i).getRole() and getContent() to your model client.
+          return rendered;
+        });
+```
+
+Inside `withLive` or `withVersion` for the same version, rendering records the variables as `statsig.llm.prompt_template_variables`. Workflow spans from `wrap` and `startWorkflow` always get them. Template variables usually hold user input, so model call spans get them only when `captureInputMessages` (or `captureAll`) is set. Rendering a different version inside the scope records nothing.
 
 ## Tracing
 
-`Otel.initialize` exports spans to Statsig and registers the tracer provider globally.
+`Otel.initialize` sets up a tracer provider that exports spans to Statsig.
 
 ```java
 import com.statsig.ai.trace.Otel;
@@ -179,9 +219,14 @@ import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
 Otel.initialize(
     InitializeTracingOptions.builder()
         .setExporterOptions(new StatsigOTLPTraceExporterOptions("your-server-sdk-key"))
+        .setServiceName("support-bot")
+        .setVersion("1.4.0")
         .setEnvironment("production")
         .build());
 ```
+
+- `setServiceName` and `setVersion` are recorded on the tracer provider's resource as `service.name` and `service.version`, and on each `statsig::gen_ai` event as the `service` and `version` custom IDs. Without a service name, the `OTEL_SERVICE_NAME` environment variable is used, then `SERVICE_NAME`.
+- The tracer provider isn't registered as the global OpenTelemetry, so it doesn't replace your app's own. To export spans from other instrumentation that uses `GlobalOpenTelemetry` too, call `setEnableGlobalTraceProviderRegistration(true)`.
 
 The context helpers below are static methods on `com.statsig.ai.trace.StatsigContextUtils`. Each one runs a `Supplier` and returns its result, or runs a `Runnable`. The overloads that take a `Context` return the new context instead, for code that manages its own scopes.
 

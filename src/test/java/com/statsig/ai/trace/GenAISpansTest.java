@@ -532,6 +532,35 @@ public class GenAISpansTest {
     }
   }
 
+  @Test
+  public void workflowSpansGetTheTemplateVariablesRenderedInsideThem() {
+    Context ctx =
+        StatsigContextUtils.withPromptVersion(
+            Context.current(), "support_agent", "Version 3", "version-3");
+
+    try (Scope ignored = ctx.makeCurrent()) {
+      startWorkflow(
+          "agent-turn",
+          () -> {
+            // What PromptVersion.getPromptMessages records when the version renders its prompt.
+            StatsigContextUtils.recordPromptTemplateVariables(
+                "version-3", Collections.singletonMap("input", "Hi"));
+            return wrap(WrapOptions.tool("lookup").build(), () -> "ok").get();
+          });
+    }
+
+    AttributeKey<String> variables =
+        AttributeKey.stringKey("statsig.llm.prompt_template_variables");
+    assertEquals("{\"input\":\"Hi\"}", span("invoke_workflow").getAttributes().get(variables));
+    assertEquals(
+        "{\"input\":\"Hi\"}",
+        event("invoke_workflow").metadata.get("statsig.llm.prompt_template_variables"));
+    assertEquals("version-3", span("execute_tool").getAttributes().get(PROMPT_VERSION_ID));
+    assertNull(span("execute_tool").getAttributes().get(variables));
+    assertFalse(
+        event("execute_tool").metadata.containsKey("statsig.llm.prompt_template_variables"));
+  }
+
   // ----------------------------------------------------------------------
   // Parenting and LLM root
   // ----------------------------------------------------------------------

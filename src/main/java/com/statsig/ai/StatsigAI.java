@@ -1,8 +1,12 @@
 package com.statsig.ai;
 
+import com.statsig.DynamicConfig;
 import com.statsig.ParameterStore;
 import com.statsig.Statsig;
+import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
+import com.statsig.ai.agents.AgentConfig;
+import com.statsig.ai.agents.AgentVersion;
 import com.statsig.ai.internal.Utils;
 import com.statsig.ai.trace.StatsigTraceConventions;
 import com.statsig.ai.trace.singleton.OtelSingleton;
@@ -15,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
   private static final Object LOCK = new Object();
+  private static final String INVALID_SDK_KEY = "INVALID-KEY";
   private static volatile StatsigAI sharedInstance;
 
   private final Statsig statsigServer;
@@ -55,18 +60,43 @@ public final class StatsigAI {
   }
 
   /**
-   * Creates or replaces the shared singleton instance and initializes it if necessary.
+   * Creates the shared singleton instance and initializes it if necessary.
    *
    * <p>This mirrors the Java core SDK pattern: call once during application startup, then fetch it
    * later with {@link #shared()} for convenience. Projects that prefer explicit multi-instance
    * management can skip this and directly use the public constructor above.
+   *
+   * <p>Like the Node SDK, when a shared instance already exists it's kept: this logs a warning and
+   * returns an invalid instance, which has a Statsig core that's never initialized and makes no
+   * network calls. Call {@link #removeSharedInstance()} first to create another one.
    */
   public static CompletableFuture<StatsigAI> newShared(StatsigInitConfig config) {
-    StatsigAI instance = new StatsigAI(config);
     synchronized (LOCK) {
+      if (sharedInstance != null) {
+        System.err.println(
+            "[StatsigAI] Shared instance has been created, call removeSharedInstance() if you want"
+                + " to create another one. Returning an invalid instance.");
+        return CompletableFuture.completedFuture(createInvalidInstance());
+      }
+      StatsigAI instance = new StatsigAI(config);
       sharedInstance = instance;
+      return instance.initialize().thenApply(ignored -> instance);
     }
-    return instance.initialize().thenApply(ignored -> instance);
+  }
+
+  /**
+   * Clears the shared instance, so {@link #newShared} can create another one. The removed instance
+   * isn't shut down; call {@link #shutdown()} on it first if it's no longer needed.
+   */
+  public static void removeSharedInstance() {
+    synchronized (LOCK) {
+      sharedInstance = null;
+    }
+  }
+
+  private static StatsigAI createInvalidInstance() {
+    StatsigOptions options = new StatsigOptions.Builder().setDisableNetwork(true).build();
+    return new StatsigAI(StatsigInitConfig.coreIndependent(INVALID_SDK_KEY, options));
   }
 
   /** Returns {@code true} when {@link #shared()} will return a non-null value. */
@@ -139,6 +169,40 @@ public final class StatsigAI {
     String targetingParamStoreName = resolvePromptTargetingRules(user, promptName);
     String targetPromptName = targetingParamStoreName.split(":")[1];
     return Prompt.makePrompt(statsigServer, user, targetPromptName);
+  }
+
+  // ------------------------------------------------------------
+  // Agents
+  // ------------------------------------------------------------
+
+  /**
+   * Returns the agent's live and candidate versions for {@code user}, from the {@code
+   * agent:<agentName>} parameter store.
+   *
+   * <p>The store's {@code live} value and {@code candidates} list name each version's DAG dynamic
+   * config, whose {@code root} value names its root prompt's dynamic config. A missing value is
+   * read as an empty string or an empty list, as in the Node SDK, so an unknown agent has a live
+   * version with an empty root prompt and no candidates.
+   */
+  public AgentConfig getAgentConfig(StatsigUser user, String agentName) {
+    ParameterStore store = statsigServer.getParameterStore(user, "agent:" + agentName);
+
+    String liveDAGConfigID = store.getString("live", "");
+    AgentVersion live = new AgentVersion(getRootConfig(user, liveDAGConfigID), true);
+
+    Object[] candidateDAGConfigIDs = store.getArray("candidates", new String[0]);
+    AgentVersion[] candidates = new AgentVersion[candidateDAGConfigIDs.length];
+    for (int i = 0; i < candidateDAGConfigIDs.length; i++) {
+      String candidateID = String.valueOf(candidateDAGConfigIDs[i]);
+      candidates[i] = new AgentVersion(getRootConfig(user, candidateID), false);
+    }
+
+    return new AgentConfig(agentName, live, candidates);
+  }
+
+  private DynamicConfig getRootConfig(StatsigUser user, String dagConfigID) {
+    DynamicConfig dagConfig = statsigServer.getDynamicConfig(user, dagConfigID);
+    return statsigServer.getDynamicConfig(user, dagConfig.getString("root", ""));
   }
 
   // ------------------------------------------------------------

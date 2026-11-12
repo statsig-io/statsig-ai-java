@@ -24,6 +24,8 @@ public final class SpanTelemetry {
   /** The user ID {@code statsig::gen_ai} events are logged with. */
   public static final String GEN_AI_EVENT_USER_ID = "statsig-ai-openai-wrapper";
 
+  private static final String EVENT_USER_CUSTOM_ID_SERVICE = "service";
+  private static final String EVENT_USER_CUSTOM_ID_VERSION = "version";
   private static final String EVENT_USER_CUSTOM_ID_ENVIRONMENT = "environment";
 
   /** Milliseconds from the span's start to the first token or response. */
@@ -35,8 +37,8 @@ public final class SpanTelemetry {
   private final int maxJsonChars;
   private final long startNano = System.nanoTime();
   private final SpanEventLogger eventLogger;
-  // The tracer's environment, from Otel.initialize, when the span starts.
-  private final String environment = OtelSingleton.getEnvironmentStatic();
+  // The tracer's service name, version and environment, from Otel.initialize, when the span starts.
+  private final StatsigResourceAttributes resources = OtelSingleton.getResourceAttributesStatic();
 
   private final Map<String, String> metadata = new HashMap<String, String>();
   private boolean ended = false;
@@ -198,19 +200,20 @@ public final class SpanTelemetry {
     Map<String, String> eventMetadata = new HashMap<String, String>(metadata);
     eventMetadata.put("duration", String.valueOf(elapsedMillis()));
     eventLogger.log(
-        eventUser(environment, ctx), spanName, Collections.unmodifiableMap(eventMetadata));
+        eventUser(resources, ctx), spanName, Collections.unmodifiableMap(eventMetadata));
   }
 
   /**
    * The user a {@code statsig::gen_ai} event is logged with: {@link #GEN_AI_EVENT_USER_ID}, with
-   * custom IDs {@code environment} (the tracer's environment) and {@code statsig.activity_id} (from
-   * the Statsig context in {@code ctx}), each only when it's set.
+   * custom IDs {@code service}, {@code version} and {@code environment} (from the tracer's resource
+   * attributes) and {@code statsig.activity_id} (from the Statsig context in {@code ctx}), each
+   * only when it's set.
    */
-  static StatsigUser eventUser(String environment, Context ctx) {
+  static StatsigUser eventUser(StatsigResourceAttributes resources, Context ctx) {
     Map<String, String> customIDs = new LinkedHashMap<String, String>();
-    if (environment != null && !environment.isEmpty()) {
-      customIDs.put(EVENT_USER_CUSTOM_ID_ENVIRONMENT, environment);
-    }
+    putIfSet(customIDs, EVENT_USER_CUSTOM_ID_SERVICE, resources.getService());
+    putIfSet(customIDs, EVENT_USER_CUSTOM_ID_VERSION, resources.getVersion());
+    putIfSet(customIDs, EVENT_USER_CUSTOM_ID_ENVIRONMENT, resources.getEnvironment());
     StatsigContextItem statsigContext = StatsigContextUtils.getActiveStatsigContext(ctx);
     if (statsigContext != null && statsigContext.getActivityID() != null) {
       customIDs.put(StatsigTraceConventions.ATTR_ACTIVITY_ID, statsigContext.getActivityID());
@@ -225,6 +228,12 @@ public final class SpanTelemetry {
   // ----------------------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------------------
+
+  private static void putIfSet(Map<String, String> map, String key, String value) {
+    if (value != null && !value.isEmpty()) {
+      map.put(key, value);
+    }
+  }
 
   private static String safeStringify(Object v) {
     try {
@@ -242,8 +251,8 @@ public final class SpanTelemetry {
     /**
      * Logs a span's {@code statsig::gen_ai} event.
      *
-     * @param user the event user: {@code statsig-ai-openai-wrapper}, with the tracer's environment
-     *     and the activity ID as custom IDs when they're set
+     * @param user the event user: {@code statsig-ai-openai-wrapper}, with the tracer's service
+     *     name, version and environment and the activity ID as custom IDs when they're set
      * @param name the span name
      * @param metadata the span's attributes and status, and its {@code duration} in milliseconds
      */

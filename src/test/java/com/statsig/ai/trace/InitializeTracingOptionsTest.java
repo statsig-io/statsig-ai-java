@@ -1,8 +1,10 @@
 package com.statsig.ai.trace;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import com.statsig.ai.trace.options.InitializeTracingOptions;
 import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
@@ -36,6 +38,24 @@ public class InitializeTracingOptionsTest {
     assertSame(exporterOptions, actualExporterOptions);
     assertEquals("https://api.fake.com/otlp/v1/traces", actualExporterOptions.getEndpoint());
     assertEquals("secret-another", actualExporterOptions.getSdkKey());
+  }
+
+  @Test
+  public void builderSetsServiceNameVersionAndGlobalRegistration() {
+    InitializeTracingOptions defaults = InitializeTracingOptions.builder().build();
+    assertNull(defaults.getServiceName());
+    assertNull(defaults.getVersion());
+    assertFalse(defaults.isGlobalTraceProviderRegistrationEnabled());
+
+    InitializeTracingOptions options =
+        InitializeTracingOptions.builder()
+            .setServiceName("checkout")
+            .setVersion("1.2.3")
+            .setEnableGlobalTraceProviderRegistration(true)
+            .build();
+    assertEquals("checkout", options.getServiceName());
+    assertEquals("1.2.3", options.getVersion());
+    assertTrue(options.isGlobalTraceProviderRegistrationEnabled());
   }
 
   @Test
