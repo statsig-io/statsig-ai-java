@@ -155,7 +155,26 @@ ChatCompletion candidateCompletion =
 
 An inner `withVersion` replaces the outer version. `prompt.withContext(...)` sets only the prompt name and the user, for code that runs before a version is chosen, and keeps any version already in context.
 
-Template variables (`statsig.llm.prompt_template_variables`) aren't recorded yet, since the Java SDK doesn't render prompt templates.
+### Rendering prompts
+
+`getPromptMessages` renders a version's messages with your template variables, using [Mustache](https://mustache.github.io/mustache.5.html) like the Node SDK. Values aren't HTML-escaped, sections and loops work, and a missing variable renders as an empty string. `getValue(key, fallback)` reads any other value from the version, and returns the fallback when the value is missing or a different type.
+
+```java
+import com.statsig.ai.PromptMessage;
+import java.util.Collections;
+import java.util.List;
+
+List<PromptMessage> messages =
+    prompt.withLive(
+        () -> {
+          List<PromptMessage> rendered =
+              live.getPromptMessages(Collections.singletonMap("input", input));
+          // Pass rendered.get(i).getRole() and getContent() to your model client.
+          return rendered;
+        });
+```
+
+Inside `withLive` or `withVersion` for the same version, rendering records the variables as `statsig.llm.prompt_template_variables`. Workflow spans from `wrap` and `startWorkflow` always get them. Template variables usually hold user input, so model call spans get them only when `captureInputMessages` (or `captureAll`) is set. Rendering a different version inside the scope records nothing.
 
 ## Tracing
 

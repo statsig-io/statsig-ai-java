@@ -14,7 +14,9 @@ import com.openai.services.blocking.chat.ChatCompletionService;
 import com.statsig.DynamicConfig;
 import com.statsig.EvaluationDetails;
 import com.statsig.StatsigUser;
+import com.statsig.ai.instrumentation.openai.GenAICaptureOptions;
 import com.statsig.ai.instrumentation.openai.OpenAIWrapper;
+import com.statsig.ai.instrumentation.openai.OpenAIWrapperConfig;
 import com.statsig.ai.trace.StatsigContextUtils;
 import com.statsig.ai.trace.StatsigSpanProcessor;
 import com.statsig.ai.trace.StatsigTraceConventions;
@@ -253,6 +255,79 @@ public class PromptContextTest {
     assertNull(outside.get(AttributeKey.stringKey("statsig.llm.prompt_version")));
     assertNull(outside.get(AttributeKey.stringKey("statsig.llm.prompt_version_id")));
     assertNull(outside.get(AttributeKey.stringKey("statsig.user_id")));
+  }
+
+  @Test
+  public void withVersionRecordsTheTemplateVariablesItsVersionRenders() throws Exception {
+    PromptVersion candidate = version("prompt:candidate-b", "Candidate B");
+    PromptVersion other = version("prompt:candidate-c", "Candidate C");
+    Prompt prompt = buildPrompt("prompt-user", candidate, other);
+
+    prompt.withVersion(
+        candidate,
+        () -> {
+          assertFalse(
+              StatsigContextUtils.getPromptSpanAttrs(Context.current(), true)
+                  .containsKey(StatsigTraceConventions.ATTR_LLM_PROMPT_TEMPLATE_VARIABLES));
+
+          candidate.getPromptMessages(Collections.singletonMap("input", "hello"));
+          // Rendering a version the scope isn't for leaves the variables alone.
+          other.getPromptMessages(Collections.singletonMap("input", "ignored"));
+
+          assertEquals(
+              Collections.singletonMap("input", "hello"),
+              StatsigContextUtils.getPromptSpanAttrs(Context.current(), true)
+                  .get(StatsigTraceConventions.ATTR_LLM_PROMPT_TEMPLATE_VARIABLES));
+          assertFalse(
+              StatsigContextUtils.getPromptSpanAttrs(Context.current(), false)
+                  .containsKey(StatsigTraceConventions.ATTR_LLM_PROMPT_TEMPLATE_VARIABLES));
+        });
+  }
+
+  @Test
+  public void getPromptMessagesOutsideAVersionScopeRecordsNothing() throws Exception {
+    PromptVersion live = buildPrompt("prompt-user").getLive();
+
+    assertEquals(
+        Collections.singletonList(new PromptMessage("system", "hoiiiiii hi")),
+        live.getPromptMessages(Collections.singletonMap("input", "hi")));
+    assertTrue(StatsigContextUtils.getPromptSpanAttrs(Context.current(), true).isEmpty());
+  }
+
+  @Test
+  public void modelSpansGetTheTemplateVariablesOnlyWhenInputMessagesAreCaptured() throws Exception {
+    InMemorySpanExporter exporter = InMemorySpanExporter.create();
+    tracerProvider =
+        SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+    resetOtelSingleton();
+    OtelSingleton.instantiate(tracerProvider);
+
+    ChatCompletionCreateParams params = mock(ChatCompletionCreateParams.class);
+    OpenAIClient capturing =
+        OpenAIWrapper.wrap(
+            mockOpenAIClient(params, null),
+            OpenAIWrapperConfig.builder()
+                .setCaptureOptions(GenAICaptureOptions.builder().captureInputMessages(true).build())
+                .build());
+    OpenAIClient notCapturing = OpenAIWrapper.wrap(mockOpenAIClient(params, null));
+
+    Prompt prompt = buildPrompt("prompt-user");
+    prompt.withLive(
+        () -> {
+          prompt.getLive().getPromptMessages(Collections.singletonMap("input", "Hi"));
+          capturing.chat().completions().create(params);
+          notCapturing.chat().completions().create(params);
+        });
+
+    List<SpanData> spans = exporter.getFinishedSpanItems();
+    assertEquals(2, spans.size());
+    AttributeKey<String> variables =
+        AttributeKey.stringKey(StatsigTraceConventions.ATTR_LLM_PROMPT_TEMPLATE_VARIABLES);
+    assertEquals("{\"input\":\"Hi\"}", spans.get(0).getAttributes().get(variables));
+    assertNull(spans.get(1).getAttributes().get(variables));
+    assertEquals(
+        LIVE_VERSION_ID,
+        spans.get(1).getAttributes().get(AttributeKey.stringKey("statsig.llm.prompt_version_id")));
   }
 
   private static OpenAIClient mockOpenAIClient(

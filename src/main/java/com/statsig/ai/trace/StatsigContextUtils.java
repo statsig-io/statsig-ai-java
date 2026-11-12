@@ -5,6 +5,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.context.ContextKey;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import java.util.Collections;
@@ -29,19 +30,51 @@ public final class StatsigContextUtils {
   // Prompt
   // ----------------------------------------------------------------------
 
+  // The template variables aren't known when a version's scope starts; they arrive later, when
+  // PromptVersion.getPromptMessages renders the prompt inside it. Contexts are immutable, so the
+  // scope holds this object and rendering fills it in, as in the Node SDK.
+  private static final class ActivePromptTemplate {
+    private final String versionID;
+    private volatile Map<String, Object> variables;
+
+    ActivePromptTemplate(String versionID) {
+      this.versionID = versionID;
+    }
+  }
+
+  private static final ContextKey<ActivePromptTemplate> CTX_ACTIVE_PROMPT_TEMPLATE =
+      ContextKey.named("STATSIG_CTX_ACTIVE_PROMPT_TEMPLATE");
+
   /**
-   * Returns {@code ctx} with the prompt name, version name and version ID. OpenAI model call spans
-   * started in it, and their {@code statsig::gen_ai} events, get the attributes from {@link
+   * Returns {@code ctx} with the prompt name, version name and version ID. Model call spans started
+   * in it, and their {@code statsig::gen_ai} events, get the attributes from {@link
    * #getPromptSpanAttrs}.
    *
    * <p>Replaces all three values already in {@code ctx}, so an inner version doesn't inherit an
-   * outer version's name or ID. A null or empty value adds no attribute.
+   * outer version's name or ID. A null or empty value adds no attribute. Template variables that
+   * this version renders inside the new context are recorded with {@link
+   * #recordPromptTemplateVariables}.
    */
   public static Context withPromptVersion(
       Context ctx, String promptName, String versionName, String versionID) {
     return ctx.with(StatsigTraceConventions.CTX_ACTIVE_PROMPT, nullToEmpty(promptName))
         .with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION, nullToEmpty(versionName))
-        .with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION_ID, nullToEmpty(versionID));
+        .with(StatsigTraceConventions.CTX_ACTIVE_PROMPT_VERSION_ID, nullToEmpty(versionID))
+        .with(CTX_ACTIVE_PROMPT_TEMPLATE, new ActivePromptTemplate(nullToEmpty(versionID)));
+  }
+
+  /**
+   * Records the variables a prompt version rendered its template with, in the current version scope
+   * from {@link #withPromptVersion}. Does nothing outside a scope, or when the scope is for a
+   * different version, so rendering another version doesn't mislabel the scope's spans. Called by
+   * {@code PromptVersion.getPromptMessages}.
+   */
+  public static void recordPromptTemplateVariables(String versionID, Map<String, ?> variables) {
+    ActivePromptTemplate template = Context.current().get(CTX_ACTIVE_PROMPT_TEMPLATE);
+    if (template != null && template.versionID.equals(versionID) && variables != null) {
+      template.variables =
+          Collections.unmodifiableMap(new LinkedHashMap<String, Object>(variables));
+    }
   }
 
   /**
@@ -67,6 +100,23 @@ public final class StatsigContextUtils {
       return Collections.emptyMap();
     }
     return Collections.unmodifiableMap(attrs);
+  }
+
+  /**
+   * Like {@link #getPromptSpanAttrs(Context)}, plus {@code statsig.llm.prompt_template_variables}
+   * (a map, recorded as JSON) when {@code includeTemplateVariables} is set and the version in
+   * {@code ctx} has rendered its template. Template variables usually hold user input, so model
+   * call spans include them only when input message capture is on, as in Node.
+   */
+  public static Map<String, Object> getPromptSpanAttrs(
+      Context ctx, boolean includeTemplateVariables) {
+    Map<String, Object> attrs = new LinkedHashMap<String, Object>(getPromptSpanAttrs(ctx));
+    ActivePromptTemplate template = ctx.get(CTX_ACTIVE_PROMPT_TEMPLATE);
+    Map<String, Object> variables = template == null ? null : template.variables;
+    if (includeTemplateVariables && variables != null) {
+      attrs.put(StatsigTraceConventions.ATTR_LLM_PROMPT_TEMPLATE_VARIABLES, variables);
+    }
+    return attrs;
   }
 
   private static void putIfNotEmpty(Map<String, String> attrs, String key, String value) {
