@@ -2,6 +2,7 @@ package com.statsig.ai;
 
 import com.statsig.ParameterStore;
 import com.statsig.Statsig;
+import com.statsig.StatsigOptions;
 import com.statsig.StatsigUser;
 import com.statsig.ai.internal.Utils;
 import com.statsig.ai.trace.StatsigTraceConventions;
@@ -15,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 
 public final class StatsigAI {
   private static final Object LOCK = new Object();
+  private static final String INVALID_SDK_KEY = "INVALID-KEY";
   private static volatile StatsigAI sharedInstance;
 
   private final Statsig statsigServer;
@@ -55,18 +57,43 @@ public final class StatsigAI {
   }
 
   /**
-   * Creates or replaces the shared singleton instance and initializes it if necessary.
+   * Creates the shared singleton instance and initializes it if necessary.
    *
    * <p>This mirrors the Java core SDK pattern: call once during application startup, then fetch it
    * later with {@link #shared()} for convenience. Projects that prefer explicit multi-instance
    * management can skip this and directly use the public constructor above.
+   *
+   * <p>Like the Node SDK, when a shared instance already exists it's kept: this logs a warning and
+   * returns an invalid instance, which has a Statsig core that's never initialized and makes no
+   * network calls. Call {@link #removeSharedInstance()} first to create another one.
    */
   public static CompletableFuture<StatsigAI> newShared(StatsigInitConfig config) {
-    StatsigAI instance = new StatsigAI(config);
     synchronized (LOCK) {
+      if (sharedInstance != null) {
+        System.err.println(
+            "[StatsigAI] Shared instance has been created, call removeSharedInstance() if you want"
+                + " to create another one. Returning an invalid instance.");
+        return CompletableFuture.completedFuture(createInvalidInstance());
+      }
+      StatsigAI instance = new StatsigAI(config);
       sharedInstance = instance;
+      return instance.initialize().thenApply(ignored -> instance);
     }
-    return instance.initialize().thenApply(ignored -> instance);
+  }
+
+  /**
+   * Clears the shared instance, so {@link #newShared} can create another one. The removed instance
+   * isn't shut down; call {@link #shutdown()} on it first if it's no longer needed.
+   */
+  public static void removeSharedInstance() {
+    synchronized (LOCK) {
+      sharedInstance = null;
+    }
+  }
+
+  private static StatsigAI createInvalidInstance() {
+    StatsigOptions options = new StatsigOptions.Builder().setDisableNetwork(true).build();
+    return new StatsigAI(StatsigInitConfig.coreIndependent(INVALID_SDK_KEY, options));
   }
 
   /** Returns {@code true} when {@link #shared()} will return a non-null value. */

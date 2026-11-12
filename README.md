@@ -35,6 +35,8 @@ Prompt prompt = ai.getPrompt(user, "support_prompt");
 String systemMessage = prompt.getLive().getWorkflowBody().get("value").toString();
 ```
 
+`newShared` keeps an existing shared instance: a second call logs a warning and returns an invalid instance that makes no network calls. To create another shared instance, call `StatsigAI.removeSharedInstance()` first. It doesn't shut the old instance down.
+
 ### Logging evaluation grades
 
 ```java
@@ -138,7 +140,7 @@ Template variables (`statsig.llm.prompt_template_variables`) aren't recorded yet
 
 ## Tracing
 
-`Otel.initialize` exports spans to Statsig and registers the tracer provider globally.
+`Otel.initialize` sets up a tracer provider that exports spans to Statsig.
 
 ```java
 import com.statsig.ai.trace.Otel;
@@ -148,9 +150,14 @@ import com.statsig.ai.trace.options.StatsigOTLPTraceExporterOptions;
 Otel.initialize(
     InitializeTracingOptions.builder()
         .setExporterOptions(new StatsigOTLPTraceExporterOptions("your-server-sdk-key"))
+        .setServiceName("support-bot")
+        .setVersion("1.4.0")
         .setEnvironment("production")
         .build());
 ```
+
+- `setServiceName` and `setVersion` are recorded on the tracer provider's resource as `service.name` and `service.version`, and on each `statsig::gen_ai` event as the `service` and `version` custom IDs. Without a service name, the `OTEL_SERVICE_NAME` environment variable is used, then `SERVICE_NAME`.
+- The tracer provider isn't registered as the global OpenTelemetry, so it doesn't replace your app's own. To export spans from other instrumentation that uses `GlobalOpenTelemetry` too, call `setEnableGlobalTraceProviderRegistration(true)`.
 
 The context helpers below are static methods on `com.statsig.ai.trace.StatsigContextUtils`. Each one runs a `Supplier` and returns its result, or runs a `Runnable`. The overloads that take a `Context` return the new context instead, for code that manages its own scopes.
 
