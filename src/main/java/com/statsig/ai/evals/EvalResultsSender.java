@@ -37,16 +37,25 @@ final class EvalResultsSender {
     final Object output;
     final boolean error;
     final Map<String, ScoreWithMetadata> scores;
+    final Long latencyMs;
+    final Long inputTokens;
+    final Long outputTokens;
 
     SentRecord(
         EvalDataRecord<?, ?> record,
         Object output,
         boolean error,
-        Map<String, ScoreWithMetadata> scores) {
+        Map<String, ScoreWithMetadata> scores,
+        Long latencyMs,
+        Long inputTokens,
+        Long outputTokens) {
       this.record = record;
       this.output = output;
       this.error = error;
       this.scores = scores;
+      this.latencyMs = latencyMs;
+      this.inputTokens = inputTokens;
+      this.outputTokens = outputTokens;
     }
   }
 
@@ -129,7 +138,8 @@ final class EvalResultsSender {
   // The API takes only strings for the input, output, expected value and score metadata values,
   // so other values (such as an object input or a numeric confidence) are sent as JSON. A Java
   // null is treated like Node's undefined: an empty input or output, and no expected value or
-  // metadata entry.
+  // metadata entry. Latency and tokens are left out when unset (a failed task, or no reported
+  // tokens), as the API takes them as optional numbers.
   private static Map<String, Object> serializeRecord(SentRecord sent) {
     EvalDataRecord<?, ?> record = sent.record;
     Map<String, Object> result = new LinkedHashMap<>();
@@ -142,6 +152,15 @@ final class EvalResultsSender {
       result.put("category", record.getCategoryAsGiven());
     }
     result.put("error", sent.error);
+    if (sent.latencyMs != null) {
+      result.put("latencyMs", sent.latencyMs);
+    }
+    if (sent.inputTokens != null) {
+      result.put("inputTokens", sent.inputTokens);
+    }
+    if (sent.outputTokens != null) {
+      result.put("outputTokens", sent.outputTokens);
+    }
     Map<String, Object> scores = new LinkedHashMap<>();
     for (Map.Entry<String, ScoreWithMetadata> entry : sent.scores.entrySet()) {
       ScoreWithMetadata score = entry.getValue();

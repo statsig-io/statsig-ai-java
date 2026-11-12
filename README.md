@@ -405,6 +405,10 @@ EvalResult<String, String, String> result =
                               .addSystemMessage("Reply with only the answer.")
                               .addUserMessage(input)
                               .build());
+              completion
+                  .usage()
+                  .ifPresent(
+                      usage -> hooks.reportTokens(usage.promptTokens(), usage.completionTokens()));
               return completion.choices().get(0).message().content().orElse("");
             })
         .scorer(args -> args.getOutput().trim().equalsIgnoreCase(args.getExpected()))
@@ -425,6 +429,14 @@ for (EvalResultRecord<String, String, String> record : result.getResults()) {
 - Records run concurrently, and so do a record's scorers. Each run uses a pool of min(32, processors + 4) threads unless you pass `executor(...)`.
 - `summaryScores(results -> ...)` adds run-level scores, such as a pass rate.
 - Inputs, outputs, expected values, parameters and metadata values that aren't strings are sent as JSON. If the results can't be sent, `run()` logs a warning and still returns them.
+
+### Latency and tokens
+
+`Eval` times each record's task, from the call until its output is ready (for `asyncTask(...)`, until its `CompletableFuture` completes), and sends that with the result as `latencyMs`. Scorers aren't part of it.
+
+The runner can't see your model calls, so the task reports its tokens with `hooks.reportTokens(inputTokens, outputTokens)`, as in the example above. Each call adds to the record's totals, so a task that makes several model calls can report each one, or its total once. It's safe to call from any thread. The totals are sent as `inputTokens` and `outputTokens`.
+
+The run page shows a Latency column, and a Tokens column when the task reported tokens. Neither is graded. Each `EvalResultRecord` also has them, from `getLatencyMs()`, `getInputTokens()` and `getOutputTokens()`. A record whose task fails sends neither, and a record whose task never calls `reportTokens` sends no tokens. `reportTokens` ignores a call with a negative count, and logs a warning.
 
 ## Development
 

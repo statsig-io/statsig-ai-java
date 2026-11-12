@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 
 /**
  * An offline eval: runs a task on every record of a dataset, grades each output with one or more
@@ -32,8 +33,10 @@ import java.util.function.Function;
  *         .run();
  * }</pre>
  *
- * <p>Records run concurrently, and so do the scorers for a record. Sending needs a Statsig Console
- * API key, from {@link Builder#apiKey(String)} or the {@code STATSIG_API_KEY} environment variable.
+ * <p>Records run concurrently, and so do the scorers for a record. Each result also carries how
+ * long the task took, and the tokens it reported with {@link EvalHooks#reportTokens(long, long)}.
+ * Sending needs a Statsig Console API key, from {@link Builder#apiKey(String)} or the {@code
+ * STATSIG_API_KEY} environment variable.
  *
  * @param <I> input type
  * @param <O> output type
@@ -56,6 +59,7 @@ public final class Eval<I, O, E> {
   private final Executor executor;
   private final String apiKey;
   private final String endpoint;
+  private final LongSupplier nanoTime;
 
   private Eval(Builder<I, O, E> builder, String apiKey) {
     this.name = builder.name;
@@ -68,6 +72,7 @@ public final class Eval<I, O, E> {
     this.executor = builder.executor;
     this.apiKey = apiKey;
     this.endpoint = builder.endpoint;
+    this.nanoTime = builder.nanoTime;
   }
 
   /**
@@ -128,16 +133,17 @@ public final class Eval<I, O, E> {
     }
   }
 
-  // Like Node's Eval(): a failed task gives an error record with every score 0.
+  // Like Node's Eval(): a failed task gives an error record with every score 0, and no latency or
+  // tokens.
   private CompletableFuture<RecordOutcome<O>> runRecord(
       EvalDataRecord<I, E> record, Executor executor) {
     EvalHooks hooks = new EvalHooks(parameters, record.getCategories());
     return CompletableFuture.supplyAsync(() -> callTask(record.getInput(), hooks), executor)
-        .thenCompose(output -> output)
+        .thenCompose(taskOutput -> taskOutput)
         .thenCompose(
-            output ->
-                scoreRecord(record, output, executor)
-                    .thenApply(scores -> RecordOutcome.succeeded(output, scores)))
+            taskOutput ->
+                scoreRecord(record, taskOutput.output, executor)
+                    .thenApply(scores -> RecordOutcome.succeeded(taskOutput, scores)))
         .exceptionally(
             error -> {
               warn("Eval failed for input " + record.getInput(), error);
@@ -145,7 +151,10 @@ public final class Eval<I, O, E> {
             });
   }
 
-  private CompletableFuture<O> callTask(I input, EvalHooks hooks) {
+  // Times the task from the call until its future completes, as config runs time the completion
+  // call, and reads the reported tokens at that moment.
+  private CompletableFuture<TaskOutput<O>> callTask(I input, EvalHooks hooks) {
+    long start = nanoTime.getAsLong();
     CompletableFuture<O> output;
     try {
       output = task.run(input, hooks);
@@ -155,7 +164,10 @@ public final class Eval<I, O, E> {
     if (output == null) {
       throw new NullPointerException("asyncTask returned a null CompletableFuture");
     }
-    return output;
+    return output.thenApply(
+        value ->
+            new TaskOutput<>(
+                value, Math.round((nanoTime.getAsLong() - start) / 1e6), hooks.getTokenTotals()));
   }
 
   private CompletableFuture<Map<String, ScoreWithMetadata>> scoreRecord(
@@ -252,9 +264,22 @@ public final class Eval<I, O, E> {
       }
       results.add(
           new EvalResultRecord<>(
-              record, outcome.output, outcome.error, Collections.unmodifiableMap(scores)));
+              record,
+              outcome.output,
+              outcome.error,
+              Collections.unmodifiableMap(scores),
+              outcome.latencyMs,
+              outcome.inputTokens,
+              outcome.outputTokens));
       sent.add(
-          new EvalResultsSender.SentRecord(record, outcome.output, outcome.error, outcome.scores));
+          new EvalResultsSender.SentRecord(
+              record,
+              outcome.output,
+              outcome.error,
+              outcome.scores,
+              outcome.latencyMs,
+              outcome.inputTokens,
+              outcome.outputTokens));
       anyError |= outcome.error;
     }
     List<EvalResultRecord<I, O, E>> unmodifiableResults = Collections.unmodifiableList(results);
@@ -329,23 +354,56 @@ public final class Eval<I, O, E> {
     return Executors.newFixedThreadPool(threads, factory);
   }
 
+  // The task's output, how long it took in ms, and the tokens it reported (null for none).
+  private static final class TaskOutput<O> {
+    final O output;
+    final long latencyMs;
+    final EvalHooks.TokenTotals tokens;
+
+    TaskOutput(O output, long latencyMs, EvalHooks.TokenTotals tokens) {
+      this.output = output;
+      this.latencyMs = latencyMs;
+      this.tokens = tokens;
+    }
+  }
+
   private static final class RecordOutcome<O> {
     final O output;
     final boolean error;
     final Map<String, ScoreWithMetadata> scores;
+    final Long latencyMs;
+    final Long inputTokens;
+    final Long outputTokens;
 
-    private RecordOutcome(O output, boolean error, Map<String, ScoreWithMetadata> scores) {
+    private RecordOutcome(
+        O output,
+        boolean error,
+        Map<String, ScoreWithMetadata> scores,
+        Long latencyMs,
+        Long inputTokens,
+        Long outputTokens) {
       this.output = output;
       this.error = error;
       this.scores = scores;
+      this.latencyMs = latencyMs;
+      this.inputTokens = inputTokens;
+      this.outputTokens = outputTokens;
     }
 
-    static <O> RecordOutcome<O> succeeded(O output, Map<String, ScoreWithMetadata> scores) {
-      return new RecordOutcome<>(output, false, scores);
+    static <O> RecordOutcome<O> succeeded(
+        TaskOutput<O> task, Map<String, ScoreWithMetadata> scores) {
+      EvalHooks.TokenTotals tokens = task.tokens;
+      return new RecordOutcome<>(
+          task.output,
+          false,
+          scores,
+          task.latencyMs,
+          tokens == null ? null : tokens.inputTokens,
+          tokens == null ? null : tokens.outputTokens);
     }
 
     static <O> RecordOutcome<O> failed(Map<String, ScoreWithMetadata> zeroScores) {
-      return new RecordOutcome<>(null, true, zeroScores);
+      return new RecordOutcome<>(null, true, zeroScores, null, null, null);
     }
   }
 
@@ -386,6 +444,7 @@ public final class Eval<I, O, E> {
     private String apiKey;
     private String endpoint = EvalResultsSender.DEFAULT_ENDPOINT;
     private Function<String, String> getenv = System::getenv;
+    private LongSupplier nanoTime = System::nanoTime;
 
     private Builder(String name, Iterable<EvalDataRecord<I, E>> data, AsyncEvalTask<I, O> task) {
       this.name = name;
@@ -481,6 +540,12 @@ public final class Eval<I, O, E> {
     // Reads environment variables. For tests.
     Builder<I, O, E> getenv(Function<String, String> getenv) {
       this.getenv = Objects.requireNonNull(getenv, "getenv");
+      return this;
+    }
+
+    // The clock that times tasks, in nanoseconds. For tests.
+    Builder<I, O, E> nanoTime(LongSupplier nanoTime) {
+      this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
       return this;
     }
 
