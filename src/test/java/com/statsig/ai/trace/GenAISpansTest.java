@@ -79,7 +79,8 @@ public class GenAISpansTest {
       AttributeKey.stringKey("statsig.llm.prompt_version");
   private static final AttributeKey<String> PROMPT_VERSION_ID =
       AttributeKey.stringKey("statsig.llm.prompt_version_id");
-  private static final String MODEL_SPAN = "openai.chat.completions";
+  // The mocked params have no request body, so no model.
+  private static final String MODEL_SPAN = "chat unknown";
 
   private InMemorySpanExporter exporter;
   private SdkTracerProvider tracerProvider;
@@ -529,6 +530,35 @@ public class GenAISpansTest {
       assertEquals(name, "version-3", metadata.get("statsig.llm.prompt_version_id"));
       assertEquals(name, "prompt-user", metadata.get("statsig.user_id"));
     }
+  }
+
+  @Test
+  public void workflowSpansGetTheTemplateVariablesRenderedInsideThem() {
+    Context ctx =
+        StatsigContextUtils.withPromptVersion(
+            Context.current(), "support_agent", "Version 3", "version-3");
+
+    try (Scope ignored = ctx.makeCurrent()) {
+      startWorkflow(
+          "agent-turn",
+          () -> {
+            // What PromptVersion.getPromptMessages records when the version renders its prompt.
+            StatsigContextUtils.recordPromptTemplateVariables(
+                "version-3", Collections.singletonMap("input", "Hi"));
+            return wrap(WrapOptions.tool("lookup").build(), () -> "ok").get();
+          });
+    }
+
+    AttributeKey<String> variables =
+        AttributeKey.stringKey("statsig.llm.prompt_template_variables");
+    assertEquals("{\"input\":\"Hi\"}", span("invoke_workflow").getAttributes().get(variables));
+    assertEquals(
+        "{\"input\":\"Hi\"}",
+        event("invoke_workflow").metadata.get("statsig.llm.prompt_template_variables"));
+    assertEquals("version-3", span("execute_tool").getAttributes().get(PROMPT_VERSION_ID));
+    assertNull(span("execute_tool").getAttributes().get(variables));
+    assertFalse(
+        event("execute_tool").metadata.containsKey("statsig.llm.prompt_template_variables"));
   }
 
   // ----------------------------------------------------------------------

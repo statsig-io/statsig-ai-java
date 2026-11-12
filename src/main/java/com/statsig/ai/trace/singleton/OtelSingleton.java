@@ -1,38 +1,54 @@
 package com.statsig.ai.trace.singleton;
 
+import com.statsig.ai.trace.StatsigResourceAttributes;
 import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 
 /**
- * Holds a global OtelSingleton instance that provides a TracerProvider and the tracer's
- * environment. If not instantiated, returns a no-op TracerProvider.
+ * Holds a global OtelSingleton instance that provides a TracerProvider and the tracer's service
+ * name, version and environment. If not instantiated, returns a no-op TracerProvider.
  */
 public class OtelSingleton {
   private static volatile OtelSingleton instance;
   private final TracerProvider tracerProvider;
-  private final String environment;
+  private final StatsigResourceAttributes resources;
 
   protected OtelSingleton(TracerProvider tracerProvider) {
-    this(tracerProvider, null);
+    this(tracerProvider, StatsigResourceAttributes.create(null, null, null));
   }
 
-  protected OtelSingleton(TracerProvider tracerProvider, String environment) {
+  protected OtelSingleton(TracerProvider tracerProvider, StatsigResourceAttributes resources) {
     this.tracerProvider = tracerProvider;
-    this.environment = environment;
+    this.resources = resources;
   }
 
-  /** Create or return existing OtelSingleton instance, with no environment. */
+  /**
+   * Create or return existing OtelSingleton instance, with no environment. The service name comes
+   * from the {@code OTEL_SERVICE_NAME} or {@code SERVICE_NAME} environment variable.
+   */
   public static OtelSingleton instantiate(TracerProvider tracerProvider) {
-    return instantiate(tracerProvider, null);
+    return instantiate(tracerProvider, (String) null);
+  }
+
+  /**
+   * Create or return existing OtelSingleton instance. The service name comes from the {@code
+   * OTEL_SERVICE_NAME} or {@code SERVICE_NAME} environment variable.
+   *
+   * @param environment the environment from {@code InitializeTracingOptions}, or null for none
+   */
+  public static OtelSingleton instantiate(TracerProvider tracerProvider, String environment) {
+    return instantiate(tracerProvider, StatsigResourceAttributes.create(null, null, environment));
   }
 
   /**
    * Create or return existing OtelSingleton instance.
    *
-   * @param environment the environment from {@code InitializeTracingOptions}, or null for none
+   * @param resources the service name, version and environment from {@code
+   *     InitializeTracingOptions}
    */
-  public static OtelSingleton instantiate(TracerProvider tracerProvider, String environment) {
+  public static OtelSingleton instantiate(
+      TracerProvider tracerProvider, StatsigResourceAttributes resources) {
     if (instance != null) {
       System.out.println(
           "[Statsig OtelSingleton] OtelSingleton instance already exists. Returning the existing instance.");
@@ -40,7 +56,7 @@ public class OtelSingleton {
     }
     synchronized (OtelSingleton.class) {
       if (instance == null) {
-        instance = new OtelSingleton(tracerProvider, environment);
+        instance = new OtelSingleton(tracerProvider, resources);
       }
     }
     return instance;
@@ -72,7 +88,12 @@ public class OtelSingleton {
 
   /** Returns the environment the tracer was initialized with, or null when there's none. */
   public String getEnvironment() {
-    return environment;
+    return resources.getEnvironment();
+  }
+
+  /** Returns the service name, version and environment the tracer was initialized with. */
+  public StatsigResourceAttributes getResourceAttributes() {
+    return resources;
   }
 
   /**
@@ -82,7 +103,20 @@ public class OtelSingleton {
   public static String getEnvironmentStatic() {
     // Read the field directly so an uninitialized singleton doesn't log the no-op warning.
     OtelSingleton current = instance;
-    return current == null ? null : current.environment;
+    return current == null ? null : current.getEnvironment();
+  }
+
+  /**
+   * Returns the service name, version and environment the tracer was initialized with. When tracing
+   * isn't initialized, like Node, the service name still comes from the {@code OTEL_SERVICE_NAME}
+   * or {@code SERVICE_NAME} environment variable.
+   */
+  public static StatsigResourceAttributes getResourceAttributesStatic() {
+    // Read the field directly so an uninitialized singleton doesn't log the no-op warning.
+    OtelSingleton current = instance;
+    return current == null
+        ? StatsigResourceAttributes.create(null, null, null)
+        : current.getResourceAttributes();
   }
 
   /**
