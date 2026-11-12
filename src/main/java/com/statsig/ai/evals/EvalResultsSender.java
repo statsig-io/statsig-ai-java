@@ -37,6 +37,9 @@ final class EvalResultsSender {
     final Object output;
     final boolean error;
     final Map<String, ScoreWithMetadata> scores;
+    // The record's trace and root span. Null when tracing isn't initialized.
+    final String traceID;
+    final String spanID;
     final Long latencyMs;
     final Long inputTokens;
     final Long outputTokens;
@@ -46,6 +49,8 @@ final class EvalResultsSender {
         Object output,
         boolean error,
         Map<String, ScoreWithMetadata> scores,
+        String traceID,
+        String spanID,
         Long latencyMs,
         Long inputTokens,
         Long outputTokens) {
@@ -53,6 +58,8 @@ final class EvalResultsSender {
       this.output = output;
       this.error = error;
       this.scores = scores;
+      this.traceID = traceID;
+      this.spanID = spanID;
       this.latencyMs = latencyMs;
       this.inputTokens = inputTokens;
       this.outputTokens = outputTokens;
@@ -150,6 +157,12 @@ final class EvalResultsSender {
     }
     if (record.getCategoryAsGiven() != null) {
       result.put("category", record.getCategoryAsGiven());
+    }
+    if (sent.traceID != null) {
+      result.put("traceID", sent.traceID);
+    }
+    if (sent.spanID != null) {
+      result.put("spanID", sent.spanID);
     }
     result.put("error", sent.error);
     if (sent.latencyMs != null) {

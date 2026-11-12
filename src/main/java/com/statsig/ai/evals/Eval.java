@@ -1,6 +1,14 @@
 package com.statsig.ai.evals;
 
+import com.statsig.ai.trace.GenAISpans;
+import com.statsig.ai.trace.StatsigContextUtils;
+import com.statsig.ai.trace.StatsigTraceConventions;
+import com.statsig.ai.trace.options.WrapOptions;
+import com.statsig.ai.trace.singleton.OtelSingleton;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.sdk.common.CompletableResultCode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -15,9 +23,12 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * An offline eval: runs a task on every record of a dataset, grades each output with one or more
@@ -38,6 +49,12 @@ import java.util.function.LongSupplier;
  * Sending needs a Statsig Console API key, from {@link Builder#apiKey(String)} or the {@code
  * STATSIG_API_KEY} environment variable.
  *
+ * <p>Tasks and scorers run with the Statsig environment {@code eval}, so their spans get {@code
+ * statsig.environment=eval}. When tracing is initialized ({@code Otel.initialize}), each record
+ * also gets its own trace: a root workflow span named after the eval, with the task's model calls
+ * and a span for each scorer under it. Its IDs are in {@link EvalResultRecord#getTraceID()} and
+ * {@link EvalResultRecord#getSpanID()}, and are sent with the results.
+ *
  * @param <I> input type
  * @param <O> output type
  * @param <E> expected value type
@@ -47,6 +64,12 @@ public final class Eval<I, O, E> {
 
   /** The name of a scorer added without one. */
   public static final String DEFAULT_SCORER_NAME = "Grader";
+
+  // The Statsig environment that tasks and scorers run in.
+  static final String EVAL_ENVIRONMENT = "eval";
+  // How long to wait for the record spans to export before sending: the default export timeout
+  // of the BatchSpanProcessor that Otel.initialize installs.
+  static final long DEFAULT_FLUSH_TIMEOUT_MILLIS = 30_000;
 
   private final String name;
   private final Iterable<EvalDataRecord<I, E>> data;
@@ -59,6 +82,7 @@ public final class Eval<I, O, E> {
   private final Executor executor;
   private final String apiKey;
   private final String endpoint;
+  private final long flushTimeoutMillis;
   private final LongSupplier nanoTime;
 
   private Eval(Builder<I, O, E> builder, String apiKey) {
@@ -72,6 +96,7 @@ public final class Eval<I, O, E> {
     this.executor = builder.executor;
     this.apiKey = apiKey;
     this.endpoint = builder.endpoint;
+    this.flushTimeoutMillis = builder.flushTimeoutMillis;
     this.nanoTime = builder.nanoTime;
   }
 
@@ -106,19 +131,31 @@ public final class Eval<I, O, E> {
   public CompletableFuture<EvalResult<I, O, E>> runAsync() {
     ExecutorService ownExecutor = executor == null ? newDefaultExecutor() : null;
     try {
+      Executor baseExecutor = executor != null ? executor : ownExecutor;
       // Tasks see the caller's OpenTelemetry context, as Node's async context carries it.
-      Executor runExecutor = Context.current().wrap(executor != null ? executor : ownExecutor);
+      Context callerContext = Context.current();
+      // Without Otel.initialize there's no exporter, so records aren't traced.
+      boolean traceRecords = OtelSingleton.isInitialized();
+      Context evalContext =
+          StatsigContextUtils.withStatsigEnvironment(callerContext, EVAL_ENVIRONMENT);
+      if (traceRecords) {
+        // Like Node's trace.deleteSpan: each record starts its own trace, even when the eval runs
+        // inside another span. The other context values, such as the environment, are kept.
+        evalContext = evalContext.with(Span.getInvalid());
+      }
       List<EvalDataRecord<I, E>> records = new ArrayList<>();
       for (EvalDataRecord<I, E> record : data) {
         records.add(Objects.requireNonNull(record, "data must not contain null records"));
       }
       List<CompletableFuture<RecordOutcome<O>>> outcomes = new ArrayList<>();
-      for (EvalDataRecord<I, E> record : records) {
-        outcomes.add(runRecord(record, runExecutor));
+      for (int i = 0; i < records.size(); i++) {
+        outcomes.add(runRecord(records.get(i), i, baseExecutor, evalContext, traceRecords));
       }
       CompletableFuture<EvalResult<I, O, E>> result =
           CompletableFuture.allOf(outcomes.toArray(new CompletableFuture<?>[0]))
-              .thenApplyAsync(ignored -> finish(records, outcomes), runExecutor);
+              .thenApplyAsync(
+                  ignored -> finish(records, outcomes, traceRecords),
+                  callerContext.wrap(baseExecutor));
       if (ownExecutor == null) {
         return result;
       }
@@ -134,21 +171,69 @@ public final class Eval<I, O, E> {
   }
 
   // Like Node's Eval(): a failed task gives an error record with every score 0, and no latency or
-  // tokens.
+  // tokens. The record runs on an executor thread in evalContext, which has the eval environment.
   private CompletableFuture<RecordOutcome<O>> runRecord(
-      EvalDataRecord<I, E> record, Executor executor) {
+      EvalDataRecord<I, E> record,
+      int recordIndex,
+      Executor executor,
+      Context evalContext,
+      boolean traceRecords) {
     EvalHooks hooks = new EvalHooks(parameters, record.getCategories());
-    return CompletableFuture.supplyAsync(() -> callTask(record.getInput(), hooks), executor)
-        .thenCompose(taskOutput -> taskOutput)
-        .thenCompose(
-            taskOutput ->
-                scoreRecord(record, taskOutput.output, executor)
-                    .thenApply(scores -> RecordOutcome.succeeded(taskOutput, scores)))
+    AtomicReference<SpanContext> recordSpan = new AtomicReference<>(SpanContext.getInvalid());
+    Supplier<CompletableFuture<RecordOutcome<O>>> runTaskAndScorers =
+        () -> runTaskAndScorers(record, hooks, executor, traceRecords);
+    Supplier<CompletableFuture<RecordOutcome<O>>> run =
+        traceRecords
+            ? () -> startRecordTrace(recordIndex, recordSpan, runTaskAndScorers)
+            : runTaskAndScorers;
+    return CompletableFuture.supplyAsync(run, evalContext.wrap(executor))
+        .thenCompose(outcome -> outcome)
         .exceptionally(
             error -> {
               warn("Eval failed for input " + record.getInput(), error);
               return RecordOutcome.failed(zeroScores());
-            });
+            })
+        .thenApply(outcome -> outcome.withRecordSpan(recordSpan.get()));
+  }
+
+  /**
+   * Like Node's startRecordTrace: runs {@code body} in a workflow span marked as the LLM root,
+   * which ends when the future {@code body} returns completes. It runs in evalContext, which has no
+   * valid span, so the span starts a new trace. Stores the span's context in {@code recordSpan}.
+   */
+  private <T> CompletableFuture<T> startRecordTrace(
+      int recordIndex,
+      AtomicReference<SpanContext> recordSpan,
+      Supplier<CompletableFuture<T>> body) {
+    WrapOptions.WorkflowBuilder options =
+        WrapOptions.workflow(name)
+            .setAttribute(StatsigTraceConventions.ATTR_EVAL_NAME, name)
+            .setAttribute(StatsigTraceConventions.ATTR_EVAL_RECORD_INDEX, recordIndex);
+    if (evalRunName != null) {
+      options.setAttribute(StatsigTraceConventions.ATTR_EVAL_RUN_NAME, evalRunName);
+    }
+    return GenAISpans.startWorkflow(
+        options.build(),
+        () -> {
+          recordSpan.set(Span.current().getSpanContext());
+          return body.get();
+        });
+  }
+
+  // Runs the task now, on this thread, then the scorers on executor threads. Those run in this
+  // thread's context, which has the environment and, when traced, the record's span, wherever the
+  // task's future completes.
+  private CompletableFuture<RecordOutcome<O>> runTaskAndScorers(
+      EvalDataRecord<I, E> record, EvalHooks hooks, Executor executor, boolean traceRecords) {
+    Executor recordExecutor = Context.current().wrap(executor);
+    // thenCompose on a completed future calls the task now, and turns a throw into a failed
+    // future, as supplyAsync does.
+    return CompletableFuture.completedFuture(record.getInput())
+        .thenCompose(input -> callTask(input, hooks))
+        .thenCompose(
+            taskOutput ->
+                scoreRecord(record, taskOutput.output, recordExecutor, traceRecords)
+                    .thenApply(scores -> RecordOutcome.succeeded(taskOutput, scores)));
   }
 
   // Times the task from the call until its future completes, as config runs time the completion
@@ -171,12 +256,12 @@ public final class Eval<I, O, E> {
   }
 
   private CompletableFuture<Map<String, ScoreWithMetadata>> scoreRecord(
-      EvalDataRecord<I, E> record, O output, Executor executor) {
+      EvalDataRecord<I, E> record, O output, Executor executor, boolean traceRecords) {
     EvalScorerArgs<I, O, E> args = new EvalScorerArgs<>(record, output);
     List<String> names = new ArrayList<>(scorers.keySet());
     List<CompletableFuture<ScoreWithMetadata>> scores = new ArrayList<>();
     for (String scorerName : names) {
-      scores.add(runScorer(scorerName, scorers.get(scorerName), args, executor));
+      scores.add(runScorer(scorerName, scorers.get(scorerName), args, executor, traceRecords));
     }
     return CompletableFuture.allOf(scores.toArray(new CompletableFuture<?>[0]))
         .thenApply(
@@ -189,13 +274,40 @@ public final class Eval<I, O, E> {
             });
   }
 
-  // Like Node's runScorer: a throw or an invalid score gives 0 and a warning.
+  // Runs the scorer on an executor thread, in a span of its own when traced.
   private static <I, O, E> CompletableFuture<ScoreWithMetadata> runScorer(
       String scorerName,
       EvalScorer<I, O, E> scorer,
       EvalScorerArgs<I, O, E> args,
-      Executor executor) {
-    return CompletableFuture.supplyAsync(() -> callScorer(scorer, args), executor)
+      Executor executor,
+      boolean traceRecords) {
+    Supplier<CompletableFuture<ScoreWithMetadata>> score = () -> scoreNow(scorerName, scorer, args);
+    Supplier<CompletableFuture<ScoreWithMetadata>> run =
+        traceRecords ? () -> startScorerSpan(scorerName, score) : score;
+    return CompletableFuture.supplyAsync(run, executor).thenCompose(result -> result);
+  }
+
+  /**
+   * Like Node's startScorerSpan: runs {@code body} in a child workflow span named after the scorer,
+   * which ends when the future {@code body} returns completes.
+   */
+  private static <T> CompletableFuture<T> startScorerSpan(
+      String scorerName, Supplier<CompletableFuture<T>> body) {
+    WrapOptions options =
+        WrapOptions.workflow(scorerName)
+            .setAttribute(StatsigTraceConventions.ATTR_EVAL_SCORER_NAME, scorerName)
+            .build();
+    return GenAISpans.wrap(options, body).get();
+  }
+
+  // Like Node's runScorer: calls the scorer now, on this thread. A throw or an invalid score gives
+  // 0 and a warning, so the future never fails.
+  private static <I, O, E> CompletableFuture<ScoreWithMetadata> scoreNow(
+      String scorerName, EvalScorer<I, O, E> scorer, EvalScorerArgs<I, O, E> args) {
+    // thenApply on a completed future calls the scorer now, and turns a throw into a failed
+    // future, as supplyAsync does.
+    return CompletableFuture.completedFuture(args)
+        .thenApply(scorerArgs -> callScorer(scorer, scorerArgs))
         .thenCompose(Eval::awaitIfStage)
         .handle(
             (rawScore, error) -> {
@@ -251,7 +363,9 @@ public final class Eval<I, O, E> {
   }
 
   private EvalResult<I, O, E> finish(
-      List<EvalDataRecord<I, E>> records, List<CompletableFuture<RecordOutcome<O>>> outcomes) {
+      List<EvalDataRecord<I, E>> records,
+      List<CompletableFuture<RecordOutcome<O>>> outcomes,
+      boolean traceRecords) {
     List<EvalResultRecord<I, O, E>> results = new ArrayList<>();
     List<EvalResultsSender.SentRecord> sent = new ArrayList<>();
     boolean anyError = false;
@@ -268,6 +382,8 @@ public final class Eval<I, O, E> {
               outcome.output,
               outcome.error,
               Collections.unmodifiableMap(scores),
+              outcome.traceID,
+              outcome.spanID,
               outcome.latencyMs,
               outcome.inputTokens,
               outcome.outputTokens));
@@ -277,6 +393,8 @@ public final class Eval<I, O, E> {
               outcome.output,
               outcome.error,
               outcome.scores,
+              outcome.traceID,
+              outcome.spanID,
               outcome.latencyMs,
               outcome.inputTokens,
               outcome.outputTokens));
@@ -284,8 +402,30 @@ public final class Eval<I, O, E> {
     }
     List<EvalResultRecord<I, O, E>> unmodifiableResults = Collections.unmodifiableList(results);
     Map<String, Double> summaryScores = runSummaryScorer(unmodifiableResults);
+    if (traceRecords) {
+      flushRecordSpans();
+    }
     EvalResultsSender.send(endpoint, name, apiKey, sent, evalRunName, summaryScores, parameters);
     return new EvalResult<>(unmodifiableResults, anyError, summaryScores);
+  }
+
+  // Like Node, exports the record spans before sending the results, so they aren't lost if the
+  // process exits right after the eval. Runs on an executor thread, never runAsync's caller, and
+  // waits at most flushTimeoutMillis. A failure or a timeout is logged, and the results are still
+  // sent.
+  private void flushRecordSpans() {
+    CompletableResultCode flush;
+    try {
+      flush = OtelSingleton.flushInstance().join(flushTimeoutMillis, TimeUnit.MILLISECONDS);
+    } catch (RuntimeException e) {
+      warn("Failed to flush eval spans", e);
+      return;
+    }
+    if (!flush.isDone()) {
+      warn("Timed out flushing eval spans after " + flushTimeoutMillis + " ms", null);
+    } else if (!flush.isSuccess()) {
+      warn("Failed to flush eval spans", flush.getFailureThrowable());
+    }
   }
 
   // Like Node's runSummaryScorer: a throw gives no summary scores and a warning.
@@ -371,6 +511,9 @@ public final class Eval<I, O, E> {
     final O output;
     final boolean error;
     final Map<String, ScoreWithMetadata> scores;
+    // The record's trace and root span. Null when the record isn't traced.
+    final String traceID;
+    final String spanID;
     final Long latencyMs;
     final Long inputTokens;
     final Long outputTokens;
@@ -379,12 +522,16 @@ public final class Eval<I, O, E> {
         O output,
         boolean error,
         Map<String, ScoreWithMetadata> scores,
+        String traceID,
+        String spanID,
         Long latencyMs,
         Long inputTokens,
         Long outputTokens) {
       this.output = output;
       this.error = error;
       this.scores = scores;
+      this.traceID = traceID;
+      this.spanID = spanID;
       this.latencyMs = latencyMs;
       this.inputTokens = inputTokens;
       this.outputTokens = outputTokens;
@@ -397,13 +544,31 @@ public final class Eval<I, O, E> {
           task.output,
           false,
           scores,
+          null,
+          null,
           task.latencyMs,
           tokens == null ? null : tokens.inputTokens,
           tokens == null ? null : tokens.outputTokens);
     }
 
     static <O> RecordOutcome<O> failed(Map<String, ScoreWithMetadata> zeroScores) {
-      return new RecordOutcome<>(null, true, zeroScores, null, null, null);
+      return new RecordOutcome<>(null, true, zeroScores, null, null, null, null, null);
+    }
+
+    // Like Node's getActiveSpanIDs: no IDs unless the span is valid.
+    RecordOutcome<O> withRecordSpan(SpanContext span) {
+      if (!span.isValid()) {
+        return this;
+      }
+      return new RecordOutcome<>(
+          output,
+          error,
+          scores,
+          span.getTraceId(),
+          span.getSpanId(),
+          latencyMs,
+          inputTokens,
+          outputTokens);
     }
   }
 
@@ -444,6 +609,7 @@ public final class Eval<I, O, E> {
     private String apiKey;
     private String endpoint = EvalResultsSender.DEFAULT_ENDPOINT;
     private Function<String, String> getenv = System::getenv;
+    private long flushTimeoutMillis = DEFAULT_FLUSH_TIMEOUT_MILLIS;
     private LongSupplier nanoTime = System::nanoTime;
 
     private Builder(String name, Iterable<EvalDataRecord<I, E>> data, AsyncEvalTask<I, O> task) {
@@ -540,6 +706,12 @@ public final class Eval<I, O, E> {
     // Reads environment variables. For tests.
     Builder<I, O, E> getenv(Function<String, String> getenv) {
       this.getenv = Objects.requireNonNull(getenv, "getenv");
+      return this;
+    }
+
+    // How long to wait for the record spans to export before sending. For tests.
+    Builder<I, O, E> flushTimeout(long timeout, TimeUnit unit) {
+      this.flushTimeoutMillis = unit.toMillis(timeout);
       return this;
     }
 
