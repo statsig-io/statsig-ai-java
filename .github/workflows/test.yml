@@ -25,3 +25,7 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test
 
+      # Builds the jar, sources and javadoc jars that Publish uploads, so a javadoc error fails here
+      # rather than during a release.
+      - name: Build the Maven Central artifacts
+        run: ./gradlew publishToMavenLocal -PsignAllPublications=false

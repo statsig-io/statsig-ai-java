@@ -1,6 +1,7 @@
 plugins {
-    id 'java'
+    id 'java-library'
     id 'com.diffplug.spotless' version '6.25.0'
+    id 'com.vanniktech.maven.publish' version '0.34.0'
 }
 
 repositories {
@@ -8,11 +9,12 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.statsig:javacore:0.11.1:uber'
-    implementation 'io.opentelemetry:opentelemetry-api:1.53.0'
-    implementation 'io.opentelemetry:opentelemetry-sdk:1.53.0'
+    // api: the public API takes and returns these libraries' types, so consumers compile against them.
+    api 'com.statsig:javacore:0.11.1:uber'
+    api 'io.opentelemetry:opentelemetry-api:1.53.0'
+    api 'io.opentelemetry:opentelemetry-sdk:1.53.0'
     implementation 'io.opentelemetry:opentelemetry-exporter-otlp:1.53.0'
-    implementation 'com.openai:openai-java:4.7.1'
+    api 'com.openai:openai-java:4.7.1'
     // Optional: only apps that call AnthropicWrapper need the Anthropic SDK. 2.71.0 is the newest
     // release without an opentelemetry-api dependency, which would clash with the SDK's version.
     compileOnly 'com.anthropic:anthropic-java:2.71.0'
